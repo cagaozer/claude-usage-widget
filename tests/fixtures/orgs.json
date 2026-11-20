@@ -1,0 +1,14 @@
+[
+  {
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "name": "Personal",
+    "capabilities": ["claude_pro", "chat"],
+    "rate_limit_tier": "default_claude_ai"
+  },
+  {
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "name": "Work API",
+    "capabilities": ["api"],
+    "rate_limit_tier": null
+  }
+]
