@@ -106,7 +106,7 @@ jobs:
             target/aarch64-apple-darwin/release/claude-usage-widget-mac \
             target/x86_64-apple-darwin/release/claude-usage-widget-mac
           lipo -info target/universal/claude-usage-widget-mac
-          lipo -verify_arch x86_64 arm64 target/universal/claude-usage-widget-mac
+          lipo target/universal/claude-usage-widget-mac -verify_arch x86_64 arm64
       - name: Assemble, sign and zip the .app
         run: |
           VERSION=$(cargo pkgid -p claude_usage_widget_mac | sed 's/.*[#@]//')
