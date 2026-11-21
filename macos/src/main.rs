@@ -15,6 +15,8 @@ mod menu;
 mod panel;
 #[cfg(target_os = "macos")]
 mod paths;
+#[cfg(target_os = "macos")]
+mod signin;
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -38,6 +40,12 @@ fn main() {
     #[cfg(debug_assertions)]
     if args.iter().any(|a| a == "--demo") {
         app::run(app::StartMode::Demo, quit_after);
+        return;
+    }
+    // CI check: open the sign-in window without touching the stored session.
+    #[cfg(debug_assertions)]
+    if args.iter().any(|a| a == "--signin-smoke") {
+        app::run(app::StartMode::NeedSignIn, quit_after);
         return;
     }
     let _ = &args;

@@ -268,12 +268,36 @@ pub fn on_menu_command(id: usize) {
     }
 }
 
-/// Open the sign-in window (Task 6 replaces the body with the WKWebView flow).
+/// Open the sign-in window and wait for it (modal), then start fetching or show
+/// "Signed out — click to sign in".
 pub fn begin_sign_in() {
-    with_app(|a| {
-        let fx = a.ctl.set_state(AppState::SignedOut);
+    let open = with_app(|a| {
+        if matches!(a.ctl.state, AppState::SigningIn) || a.ctl.quitting {
+            return false; // already open, or shutting down
+        }
+        let fx = a.ctl.set_state(AppState::SigningIn);
         a.run_effects(fx);
+        true
     });
+    if open != Some(true) {
+        return;
+    }
+    // Modal loop; no borrow of the app state is held while it runs.
+    let result = crate::signin::sign_in(mtm());
+    let quitting = with_app(|a| {
+        if a.ctl.quitting {
+            return true;
+        }
+        let fx = match result {
+            Some(session) => a.ctl.signed_in(session),
+            None => a.ctl.set_state(AppState::SignedOut),
+        };
+        a.run_effects(fx);
+        false
+    });
+    if quitting == Some(true) {
+        terminate(); // quit was requested while the sign-in window was open
+    }
 }
 
 /// Quit: stop the countdown, hide, stop and join the fetch thread, save settings, then
@@ -289,7 +313,17 @@ pub fn quit() {
         a.ctl.prepare_quit()
     })
     .unwrap_or(false);
-    if proceed {
-        NSApplication::sharedApplication(mtm()).terminate(None);
+    if !proceed {
+        return;
     }
+    if crate::signin::is_active() {
+        // End the modal sign-in first; begin_sign_in terminates once it has unwound.
+        crate::signin::cancel();
+    } else {
+        terminate();
+    }
+}
+
+fn terminate() {
+    NSApplication::sharedApplication(mtm()).terminate(None);
 }
