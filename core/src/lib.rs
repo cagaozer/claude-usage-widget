@@ -16,3 +16,5 @@ pub mod controller;
 pub mod layout;
 pub mod menu;
 pub mod instance;
+#[cfg(debug_assertions)]
+pub mod demo;

@@ -531,7 +531,7 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
             #[cfg(debug_assertions)]
             StartMode::Demo => {
                 let mut fx = a.ctl.set_state(AppState::Loading);
-                fx.extend(a.ctl.start(Box::new(demo::DemoSource::default()), None));
+                fx.extend(a.ctl.start(Box::new(usage_core::demo::DemoSource::default()), None));
                 fx
             }
         };
@@ -544,40 +544,6 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
         }
         let _ = UnregisterClassW(class, Some(instance));
         ExitCode::SUCCESS
-    }
-}
-
-#[cfg(debug_assertions)]
-mod demo {
-    use chrono::{Duration, Utc};
-    use usage_core::source::{FetchError, UsageSource};
-    use usage_core::usage::{Limits, Org, UsageState, Window};
-
-    /// Fake data for `--demo` (debug builds only): numbers creep up on each refresh.
-    #[derive(Default)]
-    pub struct DemoSource {
-        n: u32,
-    }
-
-    impl UsageSource for DemoSource {
-        fn list_orgs(&mut self) -> Result<Vec<Org>, FetchError> {
-            Ok(vec![
-                Org { uuid: "demo-1".into(), name: "Personal (demo)".into() },
-                Org { uuid: "demo-2".into(), name: "Team (demo)".into() },
-            ])
-        }
-        fn fetch_usage(&mut self, _org: &str) -> Result<UsageState, FetchError> {
-            self.n += 1;
-            let now = Utc::now();
-            Ok(UsageState::Limits(Limits {
-                session: Window {
-                    utilization: (60.0 + 8.0 * self.n as f64).min(120.0),
-                    resets_at: Some(now + Duration::minutes(112)),
-                },
-                weekly: Window { utilization: 31.0, resets_at: Some(now + Duration::hours(4 * 24 + 6)) },
-                extra: vec![],
-            }))
-        }
     }
 }
 

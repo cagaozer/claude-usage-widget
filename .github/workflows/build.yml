@@ -73,6 +73,16 @@ jobs:
         run: |
           cargo build -p claude_usage_widget_mac
           cargo build --release -p claude_usage_widget_mac
+      - name: Smoke check (debug build, demo data)
+        run: |
+          sh macos/scripts/bundle.sh target/debug/claude-usage-widget-mac dist-debug dev
+          sh macos/scripts/smoke.sh dist-debug/ClaudeUsageWidget.app
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-smoke-screenshot
+          path: "*.png"
+          if-no-files-found: ignore
       - name: Assemble, sign and zip the .app
         run: |
           VERSION=$(cargo pkgid -p claude_usage_widget_mac | sed 's/.*[#@]//')
