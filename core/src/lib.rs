@@ -15,3 +15,4 @@ pub mod view;
 pub mod controller;
 pub mod layout;
 pub mod menu;
+pub mod instance;

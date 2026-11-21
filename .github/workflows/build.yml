@@ -73,3 +73,14 @@ jobs:
         run: |
           cargo build -p claude_usage_widget_mac
           cargo build --release -p claude_usage_widget_mac
+      - name: Assemble, sign and zip the .app
+        run: |
+          VERSION=$(cargo pkgid -p claude_usage_widget_mac | sed 's/.*[#@]//')
+          sh macos/scripts/bundle.sh target/release/claude-usage-widget-mac dist "$VERSION"
+          codesign --verify --verbose dist/ClaudeUsageWidget.app
+          ditto -c -k --keepParent dist/ClaudeUsageWidget.app ClaudeUsageWidget-mac.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeUsageWidget-mac
+          path: ClaudeUsageWidget-mac.zip
+          if-no-files-found: error

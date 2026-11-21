@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: macos/scripts/bundle.sh replaces __VERSION__ when assembling the .app. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.claudeusagewidget</string>
+    <key>CFBundleName</key>
+    <string>Claude Usage Widget</string>
+    <key>CFBundleDisplayName</key>
+    <string>Claude Usage Widget</string>
+    <key>CFBundleExecutable</key>
+    <string>ClaudeUsageWidget</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <!-- Accessory app: no Dock icon and no menu bar; the widget is the whole UI. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
