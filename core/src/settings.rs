@@ -1,8 +1,9 @@
-//! User settings persisted as JSON in %APPDATA%\ClaudeUsageWidget\settings.json.
+//! User settings persisted as `settings.json` in the platform's app data folder
+//! (`%APPDATA%\ClaudeUsageWidget` on Windows, `~/Library/Application Support/ClaudeUsageWidget` on macOS).
 
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const OPACITY_CHOICES: [u8; 4] = [100, 85, 70, 50];
 pub const INTERVAL_CHOICES: [u32; 4] = [30, 60, 120, 300];
@@ -50,20 +51,6 @@ impl Settings {
             .unwrap();
         self
     }
-}
-
-/// `%APPDATA%\ClaudeUsageWidget`, created if missing.
-pub fn app_dir() -> PathBuf {
-    let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("ClaudeUsageWidget");
-    let _ = std::fs::create_dir_all(&dir);
-    dir
-}
-
-/// `%LOCALAPPDATA%\ClaudeUsageWidget\WebView2` (not created here).
-pub fn webview_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    base.join("ClaudeUsageWidget").join("WebView2")
 }
 
 #[cfg(test)]

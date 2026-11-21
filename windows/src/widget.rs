@@ -1,14 +1,16 @@
 //! The always-on-top widget window: painting, dragging, menu, and event handling.
 
-use crate::fetcher::{Command, Event, Fetcher};
-use crate::format::Level;
+use usage_core::fetcher::{Command, Event, Fetcher};
+use usage_core::format::Level;
 use crate::gdi::{rgb, Brush, Font, MemDc, Selected};
-use crate::geometry::{clamp_to_work_areas, default_position};
-use crate::session::{clear_session, Session};
-use crate::settings::{app_dir, Settings, INTERVAL_CHOICES, OPACITY_CHOICES};
-use crate::source::{FetchError, HttpSource, UsageSource};
-use crate::usage::{Org, UsageState};
-use crate::view::{build_view, AppState, Status, ViewModel};
+use usage_core::geometry::{clamp_to_work_areas, default_position, Rect};
+use crate::dpapi_store::DpapiStore;
+use usage_core::session::{Session, SessionStore};
+use crate::paths::app_dir;
+use usage_core::settings::{Settings, INTERVAL_CHOICES, OPACITY_CHOICES};
+use usage_core::source::{FetchError, HttpSource, UsageSource};
+use usage_core::usage::{Org, UsageState};
+use usage_core::view::{build_view, AppState, Status, ViewModel};
 use std::process::ExitCode;
 use windows::core::{w, BOOL, PCWSTR};
 use windows::Win32::Foundation::*;
@@ -183,7 +185,7 @@ impl App {
         self.session = None;
         self.orgs.clear();
         self.current_org = None;
-        clear_session(&self.dir);
+        DpapiStore { dir: self.dir.clone() }.clear();
         self.set_state(AppState::SignedOut);
     }
 
@@ -405,7 +407,7 @@ impl App {
             }
             Action::SignOut => {
                 self.signed_out();
-                crate::signin_cleanup();
+                crate::app::signin_cleanup();
             }
             Action::None | Action::SignIn | Action::Quit => {}
         }
@@ -493,7 +495,8 @@ fn drain_events(hwnd: HWND) {
     }
 }
 
-fn work_areas() -> (Vec<RECT>, RECT) {
+/// Work areas of all monitors, plus the primary one, as core `Rect`s.
+fn work_areas() -> (Vec<Rect>, Rect) {
     unsafe extern "system" fn cb(mon: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
         let v = &mut *(data.0 as *mut Vec<RECT>);
         let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
@@ -508,8 +511,12 @@ fn work_areas() -> (Vec<RECT>, RECT) {
         let primary = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
         let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
         let _ = GetMonitorInfoW(primary, &mut mi);
-        (areas, mi.rcWork)
+        (areas.iter().map(to_rect).collect(), to_rect(&mi.rcWork))
     }
+}
+
+fn to_rect(r: &RECT) -> Rect {
+    Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
 }
 
 unsafe fn app<'a>(hwnd: HWND) -> Option<&'a mut App> {
@@ -720,8 +727,8 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
 
 #[cfg(debug_assertions)]
 mod demo {
-    use crate::source::{FetchError, UsageSource};
-    use crate::usage::{Limits, Org, UsageState, Window};
+    use usage_core::source::{FetchError, UsageSource};
+    use usage_core::usage::{Limits, Org, UsageState, Window};
     use chrono::{Duration, Utc};
 
     /// Fake data for `--demo` (debug builds only): numbers creep up on each refresh.
@@ -755,7 +762,7 @@ mod demo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::{Limits, Window};
+    use usage_core::usage::{Limits, Window};
     use windows::Win32::Graphics::Gdi::{GetDC, GetTextExtentPoint32W, ReleaseDC};
 
     fn text_width(font: &Font, s: &str) -> i32 {

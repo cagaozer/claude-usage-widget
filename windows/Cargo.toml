@@ -1,0 +1,45 @@
+[package]
+name = "claude_usage_widget_win"
+version = "0.1.0"
+edition = "2021"
+description = "Tiny always-on-top Windows widget showing claude.ai session and weekly usage"
+license = "MIT"
+
+[[bin]]
+name = "ClaudeUsageWidget"
+path = "src/main.rs"
+
+[dependencies]
+usage_core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+
+# Win32 and WebView2 bindings are only needed (and only build) on Windows. On other
+# targets this crate compiles to an empty `main` so `cargo build --workspace` works anywhere.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_Security",
+    "Win32_Security_Cryptography",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+# Used by examples/spike.rs only.
+ureq = "3"
+
+[build-dependencies]
+embed-resource = "3"

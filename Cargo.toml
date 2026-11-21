@@ -1,43 +1,9 @@
-[package]
-name = "claude_usage_widget"
-version = "0.1.0"
-edition = "2021"
-description = "Tiny always-on-top Windows widget showing claude.ai session and weekly usage"
-license = "MIT"
+# Cargo workspace: a platform-neutral core shared by the Windows and macOS front ends.
+[workspace]
+members = ["core", "windows", "macos"]
+resolver = "2"
 
-[[bin]]
-name = "ClaudeUsageWidget"
-path = "src/main.rs"
-
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
-ureq = "3"
-webview2-com = "0.39"
-windows-core = "0.62"
-windows = { version = "0.62", features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_Graphics_Dwm",
-    "Win32_Security",
-    "Win32_Security_Cryptography",
-    "Win32_System_Com",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
-    "Win32_System_Threading",
-    "Win32_UI_HiDpi",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
-] }
-
-[dev-dependencies]
-tempfile = "3"
-
-[build-dependencies]
-embed-resource = "3"
-
+# Profiles only take effect at the workspace root.
 [profile.release]
 opt-level = "z"
 lto = true

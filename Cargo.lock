@@ -76,7 +76,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "claude_usage_widget"
+name = "claude_usage_widget_mac"
+version = "0.1.0"
+
+[[package]]
+name = "claude_usage_widget_win"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -85,6 +89,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "ureq",
+ "usage_core",
  "webview2-com",
  "windows",
  "windows-core",
@@ -654,6 +659,17 @@ dependencies = [
  "http",
  "httparse",
  "log",
+]
+
+[[package]]
+name = "usage_core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "ureq",
 ]
 
 [[package]]

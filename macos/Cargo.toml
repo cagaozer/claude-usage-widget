@@ -1,0 +1,13 @@
+[package]
+name = "claude_usage_widget_mac"
+version = "0.1.0"
+edition = "2021"
+description = "Tiny always-on-top macOS widget showing claude.ai session and weekly usage"
+license = "MIT"
+
+# Not named "ClaudeUsageWidget" so it never collides with the Windows binary in the shared
+# target directory. macos/scripts/bundle.sh copies it into the .app under the proper name.
+[[bin]]
+name = "claude-usage-widget-mac"
+path = "src/main.rs"
+

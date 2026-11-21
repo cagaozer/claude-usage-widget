@@ -1,15 +1,22 @@
 //! Keep the widget on a visible monitor.
 
-use windows::Win32::Foundation::RECT;
+/// A screen rectangle in pixels (Windows) or points (macOS), y growing downwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Rect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
 
 pub const MARGIN: i32 = 16;
 
 /// Top-right corner of the primary work area, inset by `MARGIN`.
-pub fn default_position(size: (i32, i32), primary: RECT) -> (i32, i32) {
+pub fn default_position(size: (i32, i32), primary: Rect) -> (i32, i32) {
     (primary.right - size.0 - MARGIN, primary.top + MARGIN)
 }
 
-fn overlap_area(a: &RECT, b: &RECT) -> i64 {
+fn overlap_area(a: &Rect, b: &Rect) -> i64 {
     let w = (a.right.min(b.right) - a.left.max(b.left)).max(0) as i64;
     let h = (a.bottom.min(b.bottom) - a.top.max(b.top)).max(0) as i64;
     w * h
@@ -18,8 +25,8 @@ fn overlap_area(a: &RECT, b: &RECT) -> i64 {
 /// Return a position where the whole widget is visible: unchanged if already inside a
 /// work area, pulled inside the most-overlapping area if partly visible, otherwise the
 /// default position on the primary monitor.
-pub fn clamp_to_work_areas(pos: (i32, i32), size: (i32, i32), areas: &[RECT], primary: RECT) -> (i32, i32) {
-    let win = RECT { left: pos.0, top: pos.1, right: pos.0 + size.0, bottom: pos.1 + size.1 };
+pub fn clamp_to_work_areas(pos: (i32, i32), size: (i32, i32), areas: &[Rect], primary: Rect) -> (i32, i32) {
+    let win = Rect { left: pos.0, top: pos.1, right: pos.0 + size.0, bottom: pos.1 + size.1 };
     let best = areas
         .iter()
         .map(|a| (overlap_area(&win, a), a))
@@ -38,8 +45,8 @@ pub fn clamp_to_work_areas(pos: (i32, i32), size: (i32, i32), areas: &[RECT], pr
 mod tests {
     use super::*;
 
-    fn r(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
-        RECT { left, top, right, bottom }
+    fn r(left: i32, top: i32, right: i32, bottom: i32) -> Rect {
+        Rect { left, top, right, bottom }
     }
 
     const SIZE: (i32, i32) = (230, 56);

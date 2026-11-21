@@ -1,25 +1,19 @@
-#![windows_subsystem = "windows"]
-
-mod fetcher;
-mod format;
-mod gdi;
-mod geometry;
-mod session;
-mod settings;
-mod signin;
-mod source;
-mod usage;
-mod view;
-mod widget;
+//! Windows start-up: single-instance guard, COM init, settings/session loading, and the
+//! sign-in hook the widget calls.
 
 use std::process::ExitCode;
-use widget::StartMode;
+use crate::dpapi_store::DpapiStore;
+use crate::paths;
+use crate::signin;
+use crate::widget::{self, StartMode};
+use usage_core::session::{Session, SessionStore};
+use usage_core::settings;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, PostMessageW, MB_ICONWARNING, MB_OK, WM_CLOSE};
 use windows::Win32::System::Threading::CreateMutexW;
 
-fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     // Single instance: a second launch exits silently.
     let mutex = unsafe { CreateMutexW(None, true, w!(r"Local\ClaudeUsageWidget.SingleInstance")) };
     let Ok(mutex) = mutex else { return ExitCode::FAILURE };
@@ -34,7 +28,7 @@ fn main() -> ExitCode {
         // WebView2 requires a single-threaded apartment on the UI thread.
         let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
     }
-    let dir = settings::app_dir();
+    let dir = paths::app_dir();
     let settings = settings::Settings::load(&dir);
     let start = start_mode(&dir);
     let code = widget::run(settings, start, sign_in);
@@ -50,17 +44,17 @@ fn start_mode(dir: &std::path::Path) -> StartMode {
     if std::env::args().any(|a| a == "--demo") {
         return StartMode::Demo;
     }
-    match session::load_session(dir) {
+    match (DpapiStore { dir: dir.to_path_buf() }).load() {
         Some(s) => StartMode::Session(s),
         None => StartMode::NeedSignIn,
     }
 }
 
 /// Sign-in hook for the widget: shows the WebView2 window and stores the session.
-fn sign_in(owner: HWND) -> Option<session::Session> {
+fn sign_in(owner: HWND) -> Option<Session> {
     match signin::sign_in(owner) {
         Ok(s) => {
-            let _ = session::save_session(&settings::app_dir(), &s);
+            let _ = DpapiStore { dir: paths::app_dir() }.save(&s);
             Some(s)
         }
         Err(signin::SignInError::Cancelled) => None,

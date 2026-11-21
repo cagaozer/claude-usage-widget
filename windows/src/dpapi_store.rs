@@ -1,50 +1,45 @@
-//! claude.ai web session, stored encrypted with Windows DPAPI (current user).
+//! Windows session storage: the claude.ai session, encrypted with DPAPI for the current
+//! Windows user and written to `%APPDATA%\ClaudeUsageWidget\session.bin`.
 
 use std::io;
-use std::path::Path;
+use std::path::PathBuf;
+use usage_core::session::{Session, SessionStore};
 
 const FILE: &str = "session.bin";
 
-#[derive(Clone, PartialEq)]
-pub struct Session {
-    pub session_key: String,
-    pub last_active_org: Option<String>,
-}
-
-impl std::fmt::Debug for Session {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Session")
-            .field("session_key", &"<redacted>")
-            .field("last_active_org", &self.last_active_org)
-            .finish()
-    }
-}
-
+/// On-disk JSON shape (before encryption).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Stored {
     session_key: String,
     last_active_org: Option<String>,
 }
 
-pub fn save_session(dir: &Path, s: &Session) -> io::Result<()> {
-    let plain = serde_json::to_vec(&Stored {
-        session_key: s.session_key.clone(),
-        last_active_org: s.last_active_org.clone(),
-    })?;
-    let sealed = dpapi::protect(&plain)?;
-    std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join(FILE), sealed)
+/// `SessionStore` backed by a DPAPI-encrypted file in `dir`.
+pub struct DpapiStore {
+    pub dir: PathBuf,
 }
 
-pub fn load_session(dir: &Path) -> Option<Session> {
-    let sealed = std::fs::read(dir.join(FILE)).ok()?;
-    let plain = dpapi::unprotect(&sealed).ok()?;
-    let st: Stored = serde_json::from_slice(&plain).ok()?;
-    Some(Session { session_key: st.session_key, last_active_org: st.last_active_org })
-}
+impl SessionStore for DpapiStore {
+    fn save(&self, s: &Session) -> io::Result<()> {
+        let plain = serde_json::to_vec(&Stored {
+            session_key: s.session_key.clone(),
+            last_active_org: s.last_active_org.clone(),
+        })?;
+        let sealed = dpapi::protect(&plain)?;
+        std::fs::create_dir_all(&self.dir)?;
+        std::fs::write(self.dir.join(FILE), sealed)
+    }
 
-pub fn clear_session(dir: &Path) {
-    let _ = std::fs::remove_file(dir.join(FILE));
+    fn load(&self) -> Option<Session> {
+        let sealed = std::fs::read(self.dir.join(FILE)).ok()?;
+        let plain = dpapi::unprotect(&sealed).ok()?;
+        let st: Stored = serde_json::from_slice(&plain).ok()?;
+        Some(Session { session_key: st.session_key, last_active_org: st.last_active_org })
+    }
+
+    fn clear(&self) {
+        let _ = std::fs::remove_file(self.dir.join(FILE));
+    }
 }
 
 mod dpapi {
@@ -94,11 +89,15 @@ mod tests {
         Session { session_key: "sk-ant-sid01-TESTSECRET-abcdef".into(), last_active_org: Some("org-1".into()) }
     }
 
+    fn store(dir: &tempfile::TempDir) -> DpapiStore {
+        DpapiStore { dir: dir.path().to_path_buf() }
+    }
+
     #[test]
     fn session_roundtrip_dpapi() {
         let dir = tempfile::tempdir().unwrap();
-        save_session(dir.path(), &sample()).unwrap();
-        assert_eq!(load_session(dir.path()), Some(sample()));
+        store(&dir).save(&sample()).unwrap();
+        assert_eq!(store(&dir).load(), Some(sample()));
         let raw = std::fs::read(dir.path().join("session.bin")).unwrap();
         let needle = b"TESTSECRET";
         assert!(!raw.windows(needle.len()).any(|w| w == needle), "key stored in plaintext");
@@ -107,22 +106,17 @@ mod tests {
     #[test]
     fn session_missing_or_tampered_is_none() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(load_session(dir.path()), None);
+        assert_eq!(store(&dir).load(), None);
         std::fs::write(dir.path().join("session.bin"), b"garbage").unwrap();
-        assert_eq!(load_session(dir.path()), None);
-    }
-
-    #[test]
-    fn session_debug_redacts() {
-        assert!(!format!("{:?}", sample()).contains("TESTSECRET"));
+        assert_eq!(store(&dir).load(), None);
     }
 
     #[test]
     fn clear_session_removes_file() {
         let dir = tempfile::tempdir().unwrap();
-        save_session(dir.path(), &sample()).unwrap();
-        clear_session(dir.path());
+        store(&dir).save(&sample()).unwrap();
+        store(&dir).clear();
         assert!(!dir.path().join("session.bin").exists());
-        clear_session(dir.path()); // idempotent
+        store(&dir).clear(); // idempotent
     }
 }

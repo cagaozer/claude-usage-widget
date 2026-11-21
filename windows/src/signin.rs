@@ -4,8 +4,8 @@
 //! WebView's cookie store once a second; when `sessionKey` appears we keep it (plus
 //! `lastActiveOrg`), close everything, and delete the WebView2 profile folder.
 
-use crate::session::Session;
-use crate::settings::webview_dir;
+use usage_core::session::Session;
+use crate::paths::webview_dir;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};

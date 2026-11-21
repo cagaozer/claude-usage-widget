@@ -94,8 +94,8 @@ pub fn parse_orgs(json: &str) -> Result<Vec<Org>, ParseError> {
 mod tests {
     use super::*;
 
-    const PRO: &str = include_str!("../tests/fixtures/usage_pro.json");
-    const ORGS: &str = include_str!("../tests/fixtures/orgs.json");
+    const PRO: &str = include_str!("../../tests/fixtures/usage_pro.json");
+    const ORGS: &str = include_str!("../../tests/fixtures/orgs.json");
 
     fn limits(s: &str) -> Limits {
         match parse_usage(s).expect("parses") {
