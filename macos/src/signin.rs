@@ -237,18 +237,11 @@ fn teardown() -> Option<OnDone> {
 
 /// Look for the session cookie; called once a second.
 fn poll_cookies() {
-    if cfg!(debug_assertions) {
-        with_state(|s| {
-            let (loading, progress) = unsafe { (s.web.isLoading(), s.web.estimatedProgress()) };
-            dlog(&format!("tick: loading={loading} progress={progress:.2} page={}", page(&s.web)));
-        });
-    }
     let Some(store) = with_state(|s| unsafe { s.web.configuration().websiteDataStore().httpCookieStore() }) else {
         return;
     };
     let block = RcBlock::new(|cookies: NonNull<NSArray<NSHTTPCookie>>| {
         let cookies = unsafe { cookies.as_ref() };
-        dlog(&format!("cookie check: {} cookies", cookies.count()));
         let triples: Vec<(String, String, String)> = cookies
             .iter()
             .map(|c| (c.name().to_string(), c.domain().to_string(), c.value().to_string()))

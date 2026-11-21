@@ -1,6 +1,6 @@
 # Claude Usage Widget
 
-A tiny always-on-top Windows widget that shows your Claude plan usage — the 5-hour
+A tiny always-on-top widget for **Windows and macOS** that shows your Claude plan usage — the 5-hour
 **session** limit and the **weekly** limit, each with time until reset — so you don't
 have to keep typing `/usage` in Claude Code.
 
@@ -26,7 +26,7 @@ have to keep typing `/usage` in Claude Code.
 > - The widget never uses Claude Code's credentials, never bypasses bot protection, and
 >   identifies itself honestly (`User-Agent: ClaudeUsageWidget/<version>`).
 
-## Download and run
+## Download and run (Windows)
 
 1. Download `ClaudeUsageWidget.exe` from the Releases page (or build it, below).
 2. Put it anywhere (Desktop, a tools folder…) and double-click it.
@@ -38,13 +38,34 @@ have to keep typing `/usage` in Claude Code.
 The widget needs the Microsoft Edge **WebView2 Runtime** for the sign-in window. It ships
 with Windows 11 and current Windows 10; if it's missing, the widget tells you where to get it.
 
+## Download and run (macOS)
+
+Requires macOS 12 (Monterey) or later, Apple Silicon or Intel.
+
+1. Download `ClaudeUsageWidget-mac.zip` from the Releases page and unzip it.
+2. Drag **ClaudeUsageWidget.app** into your **Applications** folder.
+3. The app isn't notarized by Apple (that needs a paid developer account), so the first
+   launch is blocked:
+   - **macOS 15 or later:** open it once, then go to **System Settings → Privacy &
+     Security**, scroll down, and click **Open Anyway** next to ClaudeUsageWidget.
+   - **macOS 12–14:** right-click the app, choose **Open**, then **Open** again.
+4. A **Sign in to Claude** window opens on first run. Sign in as you normally do.
+5. **After each update**, macOS asks once whether the new version may use the saved
+   sign-in in your Keychain. Click **Always Allow**.
+
+The widget has no Dock icon and no menu bar; it's just the small floating panel. It
+stays on top of other windows and shows on every desktop (Space).
+
 ### Signing in
 
-| Method | Status |
-|---|---|
-| Google | Tested. Google opens in its own small pop-up; sign in there. |
-| Email code | Should work (standard claude.ai page); not yet tested. |
-| Apple, company SSO | Untested. |
+| Method | Windows | macOS |
+|---|---|---|
+| Google | Tested. Google opens in its own small pop-up; sign in there. | Not yet tested on a real Mac. |
+| Email code | Should work (standard claude.ai page); not yet tested. | Not yet tested on a real Mac. |
+| Apple, company SSO | Untested. | Untested. |
+
+The macOS sign-in window has been checked automatically (it loads claude.ai's login
+page), but nobody has signed in with it on a real Mac yet.
 
 If Google refuses to sign in inside the window, choose **Continue with email** and use
 your Google address instead.
@@ -61,6 +82,8 @@ your Google address instead.
 
 ## Where it keeps things
 
+**Windows**
+
 | What | Where |
 |---|---|
 | Settings (opacity, interval, position, organization) | `%APPDATA%\ClaudeUsageWidget\settings.json` |
@@ -68,8 +91,22 @@ your Google address instead.
 | Temporary sign-in browser profile (deleted after sign-in) | `%LOCALAPPDATA%\ClaudeUsageWidget\WebView2` |
 
 To remove everything: quit the widget, delete the exe, and delete the two
-`ClaudeUsageWidget` folders above. **Sign out** in the menu deletes the widget's saved
-session; it doesn't sign you out of claude.ai in your browser or elsewhere.
+`ClaudeUsageWidget` folders above.
+
+**macOS**
+
+| What | Where |
+|---|---|
+| Settings | `~/Library/Application Support/ClaudeUsageWidget/settings.json` |
+| Your claude.ai session | Your login Keychain, item **ClaudeUsageWidget** (account `claude.ai`) |
+| Sign-in browser data | Nowhere: the sign-in window keeps it in memory only |
+
+To remove everything: quit the widget, delete the app, delete the
+`~/Library/Application Support/ClaudeUsageWidget` folder, and delete the
+**ClaudeUsageWidget** item in the Keychain Access app.
+
+On both systems, **Sign out** in the menu deletes the widget's saved session; it doesn't
+sign you out of claude.ai in your browser or elsewhere.
 
 ## Build from source
 
@@ -82,14 +119,25 @@ cargo build --release -p claude_usage_widget_win
 # -> target\release\ClaudeUsageWidget.exe
 ```
 
+On macOS (Xcode command-line tools and Rust installed):
+
+```sh
+cargo test -p usage_core -p claude_usage_widget_mac
+cargo build --release -p claude_usage_widget_mac
+sh macos/scripts/bundle.sh target/release/claude-usage-widget-mac dist 0.1.0
+# -> dist/ClaudeUsageWidget.app
+```
+
 The code is a Cargo workspace: `core/` is shared platform-neutral logic, `windows/` the
-Windows app.
+Windows app, `macos/` the macOS app.
 
 Debug builds accept `--demo` to show fake data without signing in:
-`cargo run -p claude_usage_widget_win -- --demo`.
+`cargo run -p claude_usage_widget_win -- --demo` (Windows) or
+`cargo run -p claude_usage_widget_mac -- --demo` (macOS).
 
-`scripts\leakcheck.ps1 -Minutes 180` samples the running widget's memory, handle and GDI
-counts once a minute to check for leaks.
+`scripts\leakcheck.ps1 -Minutes 180` (Windows) and `macos/scripts/leakcheck.sh` (macOS)
+sample the running widget's memory to check for leaks. GitHub Actions builds and tests
+both apps; tagging a version `v*` publishes them as a release.
 
 ## License
 
