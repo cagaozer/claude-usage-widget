@@ -255,3 +255,20 @@ Mac binary is named `claude-usage-widget-mac` so it never collides with `ClaudeU
 - [ ] **Step 3: README.** Retitle intro to Windows and macOS. New "macOS" section: download zip → unzip → drag to Applications → first launch: right-click → Open, or on macOS 15+ System Settings → Privacy & Security → **Open Anyway**; Keychain prompt after each update → **Always Allow**; Google sign-in refused → use **Continue with email**; data: Keychain item "ClaudeUsageWidget" + `~/Library/Application Support/ClaudeUsageWidget`; removal steps (delete app, folder, Keychain item in Keychain Access); sign-in matrix marks macOS **untested** until the manual test. Build from source: `cargo build --release -p claude_usage_widget_mac` + `macos/scripts/bundle.sh`.
 - [ ] **Step 4: Commit, push, trigger manual run.** `gh workflow run build.yml --ref mac-port`, then watch. Expected: all jobs green, `lipo -info` shows `x86_64 arm64`, leak check passes (growth ≤ 2 MB), no `release` job (not a tag). Record Mac minutes used in the ledger.
 - [ ] **Step 5: Hand off to the user** for the manual cloud-Mac test (spec phase 5: Google sign-in, live numbers, menu, drag, quit, restart without re-sign-in) and for permission to merge `mac-port` into `main` and tag a release.
+
+### Task 8: Publish — GPLv3, documentation, authorship, public repo
+
+Added by the user on approval (2026-11-21). Runs after the final review, the user's go-ahead
+to merge, and the cloud-Mac test result (or the user's choice to publish before it).
+
+**Files:**
+- Replace: `LICENSE` (full GNU GPL v3 text from https://www.gnu.org/licenses/gpl-3.0.txt)
+- Modify: `windows/Cargo.toml`, `macos/Cargo.toml`, `core/Cargo.toml` (`license = "GPL-3.0-or-later"`), `README.md`, source files lacking a module doc comment
+- Create: `docs/ARCHITECTURE.md`
+
+- [ ] **Step 1: License.** Fetch the GPL v3 text into `LICENSE`; set `license = "GPL-3.0-or-later"` in all three crates; README License section names GPL v3. Add a short SPDX header `// SPDX-License-Identifier: GPL-3.0-or-later` to every `.rs` file.
+- [ ] **Step 2: README as the GitHub description.** Lead with why it exists (Claude Code users keep typing `/usage` to see how close they are to the 5-hour and weekly limits), the problem it solves, and exactly what it displays (Session and Weekly rows: percent bar colored green/amber/red, percent, time until reset; optional per-model weekly rows; status messages), with the screenshot. Then: platforms, download/run per OS, sign-in, privacy and data storage, unofficial/terms warning, build from source, how it works, license.
+- [ ] **Step 3: Docs and comments.** `docs/ARCHITECTURE.md`: crate layout, data flow (fetcher thread → generation-tagged events → Controller → platform effects), sign-in on each OS, storage, CI. Review every module for a `//!` doc comment and comments on non-obvious code (modal re-entrancy, generation gating, popup hosting, run-loop modes); no comments restating the code.
+- [ ] **Step 4: GitHub metadata.** `gh repo edit --description "<one line>" --add-topic claude --add-topic claude-code --add-topic widget --add-topic rust --add-topic windows --add-topic macos`.
+- [ ] **Step 5: Authorship.** All commits authored and committed as `cagaozer <36961237+cagaozer@users.noreply.github.com>`, no `Co-Authored-By` AI trailers. Rewrite existing history with `git filter-branch --env-filter` (author/committer) plus `--msg-filter` (drop `Co-Authored-By: Claude…` lines) on `main` and `mac-port`; verify with `git log --format='%an %ae %cn %ce' | sort -u` (one line) and `git log --format=%B | grep -ci co-authored` (0). Force-push with `--force-with-lease`. Scan history once more for the user's email and any session key before going public.
+- [ ] **Step 6: Make public.** `gh repo edit --visibility public --accept-visibility-change-consequences`; confirm with `gh repo view --json visibility`. Mac CI can then drop the path filter (public repos get free minutes); keep it if the user prefers.
