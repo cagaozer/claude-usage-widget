@@ -131,6 +131,9 @@ impl App {
     }
 
     fn begin_sign_in(&mut self) {
+        if matches!(self.state, AppState::SigningIn) {
+            return; // already open (nested message loop)
+        }
         self.set_state(AppState::SigningIn);
         unsafe {
             let _ = UpdateWindow(self.hwnd);
