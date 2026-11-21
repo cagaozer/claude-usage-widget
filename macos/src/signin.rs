@@ -15,8 +15,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSApplication, NSBackingStoreType, NSTextField, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask};
-use objc2_foundation::{NSArray, NSHTTPCookie, NSNotification, NSObject, NSPoint, NSRect, NSSize, NSString, NSTimer, NSURLRequest, NSURL};
-use objc2_web_kit::{WKNavigationAction, WKUIDelegate, WKWebView, WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures};
+use objc2_foundation::{NSArray, NSError, NSHTTPCookie, NSNotification, NSObject, NSPoint, NSRect, NSSize, NSString, NSTimer, NSURLRequest, NSURL};
+use objc2_web_kit::{WKNavigation, WKNavigationAction, WKNavigationDelegate, WKUIDelegate, WKWebView, WKWebViewConfiguration, WKWebsiteDataStore, WKWindowFeatures};
 use std::cell::RefCell;
 use std::ptr::NonNull;
 use usage_core::session::{session_from_cookies, Session, SIGN_IN_HINT};
@@ -32,7 +32,8 @@ const HINT_H: f64 = 30.0;
 struct State {
     window: Retained<NSWindow>,
     web: Retained<WKWebView>,
-    delegate: Retained<SignInDelegate>,
+    /// WebKit and AppKit hold delegates weakly; this keeps ours alive.
+    _delegate: Retained<SignInDelegate>,
     popup: Option<(Retained<NSWindow>, Retained<WKWebView>)>,
     timer: Option<Retained<NSTimer>>,
     result: Option<Session>,
@@ -56,7 +57,7 @@ fn is_same(a: &AnyObject, b: &NSWindow) -> bool {
 }
 
 define_class!(
-    // Receives WebKit UI callbacks (pop-ups) and window-close notifications.
+    // Receives WebKit callbacks (pop-ups, page loads) and window-close notifications.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
     #[name = "CUWSignInDelegate"]
@@ -83,8 +84,10 @@ define_class!(
             let web = unsafe { WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, config) };
             unsafe {
                 web.setUIDelegate(Some(ProtocolObject::from_ref(self)));
+                web.setNavigationDelegate(Some(ProtocolObject::from_ref(self)));
                 window.setDelegate(Some(ProtocolObject::from_ref(self)));
             }
+            dlog("pop-up opened");
             window.setContentView(Some(&web));
             window.makeKeyAndOrderFront(None);
             with_state(|s| s.popup = Some((window, web.clone())));
@@ -95,6 +98,24 @@ define_class!(
         #[unsafe(method(webViewDidClose:))]
         fn web_view_did_close(&self, _web: &WKWebView) {
             close_popup();
+        }
+    }
+
+    // Page-load results, logged in debug builds only (see `dlog`).
+    unsafe impl WKNavigationDelegate for SignInDelegate {
+        #[unsafe(method(webView:didFinishNavigation:))]
+        fn did_finish(&self, web: &WKWebView, _nav: Option<&WKNavigation>) {
+            dlog(&format!("loaded {}", page(web)));
+        }
+
+        #[unsafe(method(webView:didFailProvisionalNavigation:withError:))]
+        fn did_fail_provisional(&self, web: &WKWebView, _nav: Option<&WKNavigation>, error: &NSError) {
+            dlog(&format!("failed to start loading {}: {}", page(web), error.localizedDescription()));
+        }
+
+        #[unsafe(method(webView:didFailNavigation:withError:))]
+        fn did_fail(&self, web: &WKWebView, _nav: Option<&WKNavigation>, error: &NSError) {
+            dlog(&format!("failed loading {}: {}", page(web), error.localizedDescription()));
         }
     }
 
@@ -116,6 +137,21 @@ define_class!(
         }
     }
 );
+
+/// Debug builds: print sign-in progress to stderr. Only page addresses without the
+/// query string are logged, never cookies. Release builds log nothing.
+fn dlog(msg: &str) {
+    if cfg!(debug_assertions) {
+        eprintln!("[signin] {msg}");
+    }
+}
+
+/// Scheme, host and path of the web view's current page (no query or fragment).
+fn page(web: &WKWebView) -> String {
+    let Some(url) = (unsafe { web.URL() }) else { return "(no page)".into() };
+    let full = url.absoluteString().map(|s| s.to_string()).unwrap_or_default();
+    full.split(['?', '#']).next().unwrap_or_default().to_string()
+}
 
 fn new_window(mtm: MainThreadMarker, title: &str, width: f64, height: f64) -> Retained<NSWindow> {
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height));
@@ -174,6 +210,7 @@ fn poll_cookies() {
             .map(|c| (c.name().to_string(), c.domain().to_string(), c.value().to_string()))
             .collect();
         if let Some(session) = session_from_cookies(triples.iter().map(|(n, d, v)| (n.as_str(), d.as_str(), v.as_str()))) {
+            dlog("session cookie found");
             finish(Some(session));
         }
     });
@@ -201,6 +238,8 @@ pub fn sign_in(mtm: MainThreadMarker) -> Option<Session> {
     // Content: the hint line on top, the web view below (AppKit's y grows upwards).
     let content = NSView::initWithFrame(NSView::alloc(mtm), NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT)));
     let hint = NSTextField::labelWithString(&NSString::from_str(SIGN_IN_HINT), mtm);
+    // 11 pt so the whole tip fits on one line in the 480 pt window.
+    hint.setFont(Some(&objc2_app_kit::NSFont::systemFontOfSize(11.0)));
     hint.setFrame(NSRect::new(NSPoint::new(10.0, HEIGHT - HINT_H + 7.0), NSSize::new(WIDTH - 20.0, 16.0)));
     content.addSubview(&hint);
 
@@ -214,6 +253,7 @@ pub fn sign_in(mtm: MainThreadMarker) -> Option<Session> {
     let delegate: Retained<SignInDelegate> = unsafe { msg_send![SignInDelegate::alloc(mtm), init] };
     unsafe {
         web.setUIDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        web.setNavigationDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     }
     if let Some(url) = NSURL::URLWithString(&NSString::from_str(LOGIN_URL)) {
@@ -224,7 +264,7 @@ pub fn sign_in(mtm: MainThreadMarker) -> Option<Session> {
         *cell.borrow_mut() = Some(State {
             window: window.clone(),
             web,
-            delegate,
+            _delegate: delegate,
             popup: None,
             timer: None,
             result: None,
@@ -252,6 +292,7 @@ pub fn sign_in(mtm: MainThreadMarker) -> Option<Session> {
     unsafe {
         state.web.stopLoading();
         state.web.setUIDelegate(None);
+        state.web.setNavigationDelegate(None);
         state.window.setDelegate(None);
     }
     state.window.close();

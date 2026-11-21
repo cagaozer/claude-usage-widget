@@ -52,9 +52,9 @@ echo "ok: app quit cleanly (exit code $?)"
 # Sign-in window: opens claude.ai's login page (screenshot for a human to look at) and
 # must quit cleanly even while that modal window is open. What the page shows is
 # informational only; CI can't sign in.
-"$APP_BIN" --signin-smoke --quit-after 15 &
+"$APP_BIN" --signin-smoke --quit-after 25 &
 PID=$!
-sleep 10
+sleep 20
 screencapture -x signin.png || echo "note: screencapture failed (non-fatal)"
 if ! wait_exit "$PID" 10; then
     echo "FAIL: app did not quit while the sign-in window was open"
