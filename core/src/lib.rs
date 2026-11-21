@@ -12,3 +12,6 @@ pub mod settings;
 pub mod source;
 pub mod usage;
 pub mod view;
+pub mod controller;
+pub mod layout;
+pub mod menu;

@@ -28,6 +28,29 @@ pub trait SessionStore {
     fn clear(&self);
 }
 
+/// One-line tip shown above the sign-in page on both platforms.
+pub const SIGN_IN_HINT: &str = "Google sign-in blocked? Use 'Continue with email' with your Google address.";
+
+/// In-memory store for tests. Clones share the same slot, so a test can keep a handle
+/// and inspect what the controller saved.
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub struct MemoryStore(std::rc::Rc<std::cell::RefCell<Option<Session>>>);
+
+#[cfg(test)]
+impl SessionStore for MemoryStore {
+    fn load(&self) -> Option<Session> {
+        self.0.borrow().clone()
+    }
+    fn save(&self, s: &Session) -> io::Result<()> {
+        *self.0.borrow_mut() = Some(s.clone());
+        Ok(())
+    }
+    fn clear(&self) {
+        *self.0.borrow_mut() = None;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

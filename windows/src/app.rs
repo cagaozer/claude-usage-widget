@@ -50,13 +50,11 @@ fn start_mode(dir: &std::path::Path) -> StartMode {
     }
 }
 
-/// Sign-in hook for the widget: shows the WebView2 window and stores the session.
+/// Sign-in hook for the widget: shows the WebView2 window. The controller stores the
+/// returned session.
 fn sign_in(owner: HWND) -> Option<Session> {
     match signin::sign_in(owner) {
-        Ok(s) => {
-            let _ = DpapiStore { dir: paths::app_dir() }.save(&s);
-            Some(s)
-        }
+        Ok(s) => Some(s),
         Err(signin::SignInError::Cancelled) => None,
         Err(signin::SignInError::WebView2Missing) => {
             message_box(

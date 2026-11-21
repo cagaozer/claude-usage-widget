@@ -29,7 +29,7 @@ pub enum SignInError {
     Failed(String),
 }
 
-pub const HINT: &str = "Google sign-in blocked? Use 'Continue with email' with your Google address.";
+use usage_core::session::SIGN_IN_HINT as HINT;
 const LOGIN_URL: &str = "https://claude.ai/login";
 const COOKIE_URL: &str = "https://claude.ai";
 const TIMER_POLL: usize = 1;

@@ -1,17 +1,21 @@
-//! The always-on-top widget window: painting, dragging, menu, and event handling.
+//! The always-on-top widget window: painting, dragging, menu, and Win32 event handling.
+//!
+//! App logic (state, fetching, menu contents, settings) lives in `usage_core::Controller`;
+//! this file only renders it with GDI and turns window messages into controller calls.
 
-use usage_core::fetcher::{Command, Event, Fetcher};
-use usage_core::format::Level;
-use crate::gdi::{rgb, Brush, Font, MemDc, Selected};
-use usage_core::geometry::{clamp_to_work_areas, default_position, Rect};
 use crate::dpapi_store::DpapiStore;
-use usage_core::session::{Session, SessionStore};
+use crate::gdi::{rgb, Brush, Font, MemDc, Selected};
 use crate::paths::app_dir;
-use usage_core::settings::{Settings, INTERVAL_CHOICES, OPACITY_CHOICES};
-use usage_core::source::{FetchError, HttpSource, UsageSource};
-use usage_core::usage::{Org, UsageState};
-use usage_core::view::{build_view, AppState, Status, ViewModel};
 use std::process::ExitCode;
+use std::sync::Arc;
+use usage_core::controller::{Controller, Effect};
+use usage_core::fetcher::Event;
+use usage_core::geometry::{clamp_to_work_areas, default_position, Rect};
+use usage_core::layout::{self, content_height, level_color, CLOSE, COL_BAR, COL_LABEL, COL_PCT, COL_REMAIN, NOTE_H, PAD, ROW_H, W};
+use usage_core::menu::{build_menu, menu_action, Action, MenuEntry, MenuItem, MenuSnapshot};
+use usage_core::session::Session;
+use usage_core::settings::Settings;
+use usage_core::view::{AppState, Status, ViewModel};
 use windows::core::{w, BOOL, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUNDSMALL};
@@ -20,70 +24,15 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+/// Posted by the fetch thread; lParam is a `Box<(u64, Event)>` (generation, event).
 pub const WM_APP_EVENT: u32 = WM_APP + 1;
+/// Posted to open the sign-in window once the message loop is running.
 const WM_APP_SIGNIN: u32 = WM_APP + 2;
+/// Repaints once a minute so the countdowns stay current between fetches.
 const TIMER_COUNTDOWN: usize = 1;
 
-// Logical (96-DPI) layout.
-const W: i32 = 252;
-const PAD: i32 = 8;
-const ROW_H: i32 = 20;
-const NOTE_H: i32 = 16;
-const CLOSE: i32 = 14;
-// Row columns as (left, right) in logical px.
-const COL_LABEL: (i32, i32) = (PAD, 74);
-const COL_BAR: (i32, i32) = (76, 124);
-const COL_PCT: (i32, i32) = (126, 160);
-const COL_REMAIN: (i32, i32) = (166, W - CLOSE - 6);
-
-const BG: COLORREF = rgb(0x1F, 0x1F, 0x1E);
-const TEXT: COLORREF = rgb(0xEC, 0xEC, 0xEA);
-const DIM: COLORREF = rgb(0x8A, 0x8A, 0x85);
-const TRACK: COLORREF = rgb(0x3A, 0x3A, 0x38);
-const GREEN: COLORREF = rgb(0x5C, 0xB8, 0x5C);
-const AMBER: COLORREF = rgb(0xE0, 0xA0, 0x30);
-const RED: COLORREF = rgb(0xE0, 0x55, 0x45);
-
-// Menu command ids.
-const ID_REFRESH: usize = 100;
-const ID_INTERVAL: usize = 110;
-const ID_OPACITY: usize = 120;
-const ID_ORG: usize = 200;
-const ID_SIGN_OUT: usize = 300;
-const ID_QUIT: usize = 301;
-
-const ID_SIGN_IN: usize = 302;
-
-/// What a menu click means, decided from the menu exactly as it was shown.
-#[derive(Debug, Clone, PartialEq)]
-enum Action {
-    None,
-    Refresh,
-    Interval(u32),
-    Opacity(u8),
-    Org(String),
-    SignOut,
-    SignIn,
-    Quit,
-}
-
-/// The org uuids listed in the menu, in menu order.
-struct MenuSnapshot {
-    orgs: Vec<String>,
-}
-
-fn menu_action(id: usize, snap: &MenuSnapshot) -> Action {
-    let in_range = |base: usize, len: usize| (base..base + len).contains(&id);
-    match id {
-        ID_REFRESH => Action::Refresh,
-        ID_SIGN_OUT => Action::SignOut,
-        ID_SIGN_IN => Action::SignIn,
-        ID_QUIT => Action::Quit,
-        _ if in_range(ID_INTERVAL, INTERVAL_CHOICES.len()) => Action::Interval(INTERVAL_CHOICES[id - ID_INTERVAL]),
-        _ if in_range(ID_OPACITY, OPACITY_CHOICES.len()) => Action::Opacity(OPACITY_CHOICES[id - ID_OPACITY]),
-        _ if in_range(ID_ORG, snap.orgs.len()) => Action::Org(snap.orgs[id - ID_ORG].clone()),
-        _ => Action::None,
-    }
+fn color(c: layout::Rgb) -> COLORREF {
+    rgb(c.0, c.1, c.2)
 }
 
 pub enum StartMode {
@@ -93,30 +42,21 @@ pub enum StartMode {
     Demo,
 }
 
-/// Hook used by Task 7: performs sign-in and returns a session, or None if cancelled.
+/// Performs sign-in (shows the WebView2 window) and returns a session, or None if
+/// cancelled or failed. Supplied by `app.rs`.
 pub type SignIn = fn(HWND) -> Option<Session>;
 
 struct App {
     hwnd: HWND,
-    /// Folder for settings.json / session.bin (a temp dir in tests).
-    dir: std::path::PathBuf,
-    /// Bumped whenever the fetcher is replaced or stopped; events from older
-    /// fetchers are ignored.
-    gen: u64,
-    settings: Settings,
-    state: AppState,
-    orgs: Vec<Org>,
-    current_org: Option<String>,
-    fetcher: Option<Fetcher>,
-    session: Option<Session>,
+    ctl: Controller,
     sign_in: SignIn,
     dpi: u32,
     font: Font,
     font_bold: Font,
-    quitting: bool,
 }
 
 impl App {
+    /// Scale a logical (96-DPI) length to device pixels for this window's monitor.
     fn s(&self, v: i32) -> i32 {
         v * self.dpi as i32 / 96
     }
@@ -127,15 +67,20 @@ impl App {
     }
 
     fn view(&self) -> ViewModel {
-        build_view(&self.state, chrono::Utc::now())
+        self.ctl.view(chrono::Utc::now())
     }
 
-    /// Logical height for the current view.
     fn logical_height(&self) -> i32 {
-        match self.view() {
-            ViewModel::Message(_) => PAD * 2 + ROW_H * 2,
-            ViewModel::Rows { rows, note, .. } => {
-                PAD * 2 + ROW_H * rows.len() as i32 + if note.is_some() { NOTE_H } else { 0 }
+        content_height(&self.view())
+    }
+
+    /// Carry out what the controller asked for.
+    fn run_effects(&mut self, effects: Vec<Effect>) {
+        for e in effects {
+            match e {
+                Effect::Relayout => self.resize_to_content(),
+                Effect::Opacity(pct) => self.apply_opacity(pct),
+                Effect::SignInCleanup => crate::app::signin_cleanup(),
             }
         }
     }
@@ -152,76 +97,8 @@ impl App {
         }
     }
 
-    fn set_state(&mut self, s: AppState) {
-        self.state = s;
-        self.resize_to_content();
-    }
-
-    fn start_fetcher(&mut self, source: Box<dyn UsageSource>, last_active: Option<String>) {
-        self.fetcher = None; // joins any previous thread first
-        self.gen += 1;
-        let gen = self.gen;
-        let hwnd = self.hwnd.0 as isize;
-        self.fetcher = Some(Fetcher::spawn(
-            source,
-            self.settings.interval_secs,
-            self.settings.org_id.clone(),
-            last_active,
-            move |ev| post_event(hwnd, gen, ev),
-        ));
-    }
-
-    fn start_with_session(&mut self, session: Session) {
-        let last = session.last_active_org.clone();
-        self.session = Some(session.clone());
-        self.set_state(AppState::Loading);
-        self.start_fetcher(Box::new(HttpSource::new(session)), last);
-    }
-
-
-    fn signed_out(&mut self) {
-        self.fetcher = None;
-        self.gen += 1; // anything still queued from the old fetcher is now stale
-        self.session = None;
-        self.orgs.clear();
-        self.current_org = None;
-        DpapiStore { dir: self.dir.clone() }.clear();
-        self.set_state(AppState::SignedOut);
-    }
-
-    /// Apply an event posted by fetcher generation `gen`.
-    fn handle_posted(&mut self, gen: u64, ev: Event) {
-        if gen == self.gen && !self.quitting {
-            self.on_event(ev);
-        }
-    }
-
-    fn on_event(&mut self, ev: Event) {
-        match ev {
-            Event::Orgs(orgs, chosen) => {
-                self.orgs = orgs;
-                self.current_org = Some(chosen);
-            }
-            Event::Usage(UsageState::Limits(limits)) => self.set_state(AppState::Data { limits, stale: false }),
-            Event::Usage(UsageState::NoLimits) => self.set_state(AppState::NoLimits),
-            Event::Error(FetchError::Auth) => self.signed_out(),
-            Event::Error(FetchError::Format(_)) => self.set_state(AppState::FormatChanged),
-            Event::Error(FetchError::Network(_) | FetchError::Blocked(_)) => {
-                let next = match std::mem::replace(&mut self.state, AppState::Loading) {
-                    AppState::Data { limits, .. } => AppState::Data { limits, stale: true },
-                    _ => AppState::Offline,
-                };
-                self.set_state(next);
-            }
-        }
-    }
-
-    fn save_settings(&self) {
-        let _ = self.settings.save(&self.dir);
-    }
-
-    fn apply_opacity(&self) {
-        let alpha = (self.settings.opacity_pct as u32 * 255 / 100) as u8;
+    fn apply_opacity(&self, pct: u8) {
+        let alpha = (pct as u32 * 255 / 100) as u8;
         unsafe {
             let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), alpha, LWA_ALPHA);
         }
@@ -235,43 +112,44 @@ impl App {
     /// Release everything; the caller then destroys the window (which frees `App`).
     /// Returns false if already quitting.
     fn prepare_quit(&mut self) -> bool {
-        if self.quitting {
+        if self.ctl.quitting {
             return false;
         }
-        self.quitting = true;
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
             let _ = KillTimer(Some(self.hwnd), TIMER_COUNTDOWN);
         }
-        self.fetcher = None; // signals Stop and joins the fetch thread
+        self.ctl.prepare_quit(); // stops and joins the fetch thread, saves settings
         drain_events(self.hwnd);
-        self.save_settings();
         true
     }
 
     fn paint(&self, hdc: HDC) {
         let (w, h) = (self.s(W), self.s(self.logical_height()));
+        // Draw into an off-screen bitmap, then copy it in one go (no flicker).
         let mem = MemDc::new(hdc, w, h);
         let dc = mem.dc;
+        let (text_c, dim_c) = (color(layout::TEXT), color(layout::DIM));
         unsafe {
-            let bg = Brush::solid(BG);
+            let bg = Brush::solid(color(layout::BG));
             FillRect(dc, &RECT { left: 0, top: 0, right: w, bottom: h }, bg.0);
             SetBkMode(dc, TRANSPARENT);
             let _sel = Selected::font(dc, &self.font);
 
             // Close button.
-            SetTextColor(dc, DIM);
+            SetTextColor(dc, dim_c);
             draw_text(dc, "✕", self.close_rect(), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
             match self.view() {
                 ViewModel::Message(m) => {
-                    SetTextColor(dc, TEXT);
+                    SetTextColor(dc, text_c);
                     let rc = RECT { left: self.s(PAD), top: 0, right: w - self.s(CLOSE + 8), bottom: h };
                     draw_text(dc, &m, rc, DT_LEFT | DT_VCENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
                 }
                 ViewModel::Rows { rows, status, note } => {
-                    let text = if status == Status::Stale { DIM } else { TEXT };
-                    let track = Brush::solid(TRACK);
+                    let stale = status == Status::Stale;
+                    let text = if stale { dim_c } else { text_c };
+                    let track = Brush::solid(color(layout::TRACK));
                     for (i, row) in rows.iter().enumerate() {
                         let top = self.s(PAD + ROW_H * i as i32);
                         let bottom = top + self.s(ROW_H);
@@ -282,7 +160,7 @@ impl App {
                             let _b = Selected::font(dc, &self.font_bold);
                             draw_text(dc, &row.label, cell(COL_LABEL.0, COL_LABEL.1), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                         }
-                        // Bar.
+                        // Bar: a 6 px track, filled up to the usage fraction.
                         let mid = (top + bottom) / 2;
                         let bar = RECT { left: self.s(COL_BAR.0), top: mid - self.s(3), right: self.s(COL_BAR.1), bottom: mid + self.s(3) };
                         FillRect(dc, &bar, track.0);
@@ -290,24 +168,15 @@ impl App {
                             right: bar.left + ((bar.right - bar.left) as f64 * row.fill).round() as i32,
                             ..bar
                         };
-                        let color = if status == Status::Stale {
-                            DIM
-                        } else {
-                            match row.level {
-                                Level::Green => GREEN,
-                                Level::Amber => AMBER,
-                                Level::Red => RED,
-                            }
-                        };
-                        let fill = Brush::solid(color);
+                        let fill = Brush::solid(color(level_color(row.level, stale)));
                         FillRect(dc, &filled, fill.0);
 
                         draw_text(dc, &row.pct_text, cell(COL_PCT.0, COL_PCT.1), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-                        SetTextColor(dc, DIM);
+                        SetTextColor(dc, dim_c);
                         draw_text(dc, &row.remaining, cell(COL_REMAIN.0, COL_REMAIN.1), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                     }
                     if let Some(n) = note {
-                        SetTextColor(dc, DIM);
+                        SetTextColor(dc, dim_c);
                         let top = self.s(PAD + ROW_H * rows.len() as i32);
                         let rc = RECT { left: self.s(PAD), top, right: w - self.s(PAD), bottom: top + self.s(NOTE_H) };
                         draw_text(dc, &n, rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -318,98 +187,41 @@ impl App {
         }
     }
 
-    /// Build the popup menu for the current state. Caller tracks and destroys it.
+    /// Build the native popup menu from the shared menu model. Caller tracks and destroys it.
     fn build_menu(&self) -> Option<(HMENU, MenuSnapshot)> {
+        fn add(m: HMENU, it: &MenuItem) {
+            let wide: Vec<u16> = it.label.encode_utf16().chain([0]).collect();
+            let mut flags = MF_STRING;
+            if it.checked {
+                flags |= MF_CHECKED;
+            }
+            if !it.enabled {
+                flags |= MF_GRAYED;
+            }
+            unsafe {
+                let _ = AppendMenuW(m, flags, it.id, PCWSTR(wide.as_ptr()));
+            }
+        }
+        let (entries, snap) = build_menu(&self.ctl);
         unsafe {
             let menu = CreatePopupMenu().ok()?;
-            let add = |m: HMENU, id: usize, text: &str, checked: bool, enabled: bool| {
-                let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
-                let mut flags = MF_STRING;
-                if checked {
-                    flags |= MF_CHECKED;
-                }
-                if !enabled {
-                    flags |= MF_GRAYED;
-                }
-                let _ = AppendMenuW(m, flags, id, PCWSTR(wide.as_ptr()));
-            };
-            let sub = |parent: HMENU, child: HMENU, text: &str| {
-                let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
-                let _ = AppendMenuW(parent, MF_POPUP, child.0 as usize, PCWSTR(wide.as_ptr()));
-            };
-            let signed_in = self.fetcher.is_some();
-            let mut snap = MenuSnapshot { orgs: Vec::new() };
-
-            add(menu, ID_REFRESH, "Refresh now", false, signed_in);
-            if let Ok(m) = CreatePopupMenu() {
-                for (i, s) in INTERVAL_CHOICES.iter().enumerate() {
-                    let label = if *s <= 60 { format!("{s} s") } else { format!("{} min", s / 60) };
-                    add(m, ID_INTERVAL + i, &label, self.settings.interval_secs == *s, true);
-                }
-                sub(menu, m, "Refresh every");
-            }
-            if let Ok(m) = CreatePopupMenu() {
-                for (i, o) in OPACITY_CHOICES.iter().enumerate() {
-                    add(m, ID_OPACITY + i, &format!("{o}%"), self.settings.opacity_pct == *o, true);
-                }
-                sub(menu, m, "Opacity");
-            }
-            if self.orgs.len() > 1 {
-                if let Ok(m) = CreatePopupMenu() {
-                    for (i, o) in self.orgs.iter().enumerate() {
-                        add(m, ID_ORG + i, &o.name, self.current_org.as_deref() == Some(&o.uuid), true);
-                        snap.orgs.push(o.uuid.clone());
+            for entry in &entries {
+                match entry {
+                    MenuEntry::Item(it) => add(menu, it),
+                    MenuEntry::Separator => {
+                        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
                     }
-                    sub(menu, m, "Organization");
+                    MenuEntry::Submenu(title, items) => {
+                        let Ok(sub) = CreatePopupMenu() else { continue };
+                        for it in items {
+                            add(sub, it);
+                        }
+                        let wide: Vec<u16> = title.encode_utf16().chain([0]).collect();
+                        let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, PCWSTR(wide.as_ptr()));
+                    }
                 }
             }
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            if signed_in || self.session.is_some() {
-                add(menu, ID_SIGN_OUT, "Sign out", false, true);
-            } else {
-                add(menu, ID_SIGN_IN, "Sign in", false, true);
-            }
-            add(menu, ID_QUIT, "Quit", false, true);
             Some((menu, snap))
-        }
-    }
-
-    /// Apply a non-modal menu action. Sign-in and Quit are handled by the caller.
-    fn apply(&mut self, action: Action) {
-        match action {
-            Action::Refresh => {
-                if let Some(f) = &self.fetcher {
-                    f.send(Command::RefreshNow);
-                }
-            }
-            Action::Interval(secs) => {
-                self.settings.interval_secs = secs;
-                if let Some(f) = &self.fetcher {
-                    f.send(Command::SetInterval(secs));
-                }
-                self.save_settings();
-            }
-            Action::Opacity(pct) => {
-                self.settings.opacity_pct = pct;
-                self.apply_opacity();
-                self.save_settings();
-            }
-            Action::Org(id) => {
-                self.settings.org_id = Some(id.clone());
-                self.current_org = Some(id.clone());
-                self.save_settings();
-                if self.fetcher.is_some() {
-                    self.set_state(AppState::Loading);
-                }
-                if let Some(f) = &self.fetcher {
-                    f.send(Command::SetOrg(id));
-                }
-            }
-            Action::SignOut => {
-                self.signed_out();
-                crate::app::signin_cleanup();
-            }
-            Action::None | Action::SignIn | Action::Quit => {}
         }
     }
 }
@@ -433,7 +245,8 @@ fn show_menu(hwnd: HWND, x: i32, y: i32) {
         Action::Quit => quit(hwnd),
         action => {
             if let Some(a) = unsafe { app(hwnd) } {
-                a.apply(action);
+                let fx = a.ctl.apply(action);
+                a.run_effects(fx);
             }
         }
     }
@@ -442,10 +255,11 @@ fn show_menu(hwnd: HWND, x: i32, y: i32) {
 fn begin_sign_in(hwnd: HWND) {
     let sign_in = {
         let Some(a) = (unsafe { app(hwnd) }) else { return };
-        if matches!(a.state, AppState::SigningIn) || a.quitting {
+        if matches!(a.ctl.state, AppState::SigningIn) || a.ctl.quitting {
             return; // already open (nested message loop)
         }
-        a.set_state(AppState::SigningIn);
+        let fx = a.ctl.set_state(AppState::SigningIn);
+        a.run_effects(fx);
         a.sign_in
     };
     unsafe {
@@ -453,10 +267,11 @@ fn begin_sign_in(hwnd: HWND) {
     }
     let result = sign_in(hwnd);
     let Some(a) = (unsafe { app(hwnd) }) else { return };
-    match result {
-        Some(session) => a.start_with_session(session),
-        None => a.set_state(AppState::SignedOut),
-    }
+    let fx = match result {
+        Some(session) => a.ctl.signed_in(session),
+        None => a.ctl.set_state(AppState::SignedOut),
+    };
+    a.run_effects(fx);
 }
 
 fn quit(hwnd: HWND) {
@@ -519,6 +334,7 @@ fn to_rect(r: &RECT) -> Rect {
     Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
 }
 
+/// The `App` stored in the window's user data, if the window is still alive.
 unsafe fn app<'a>(hwnd: HWND) -> Option<&'a mut App> {
     let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut App;
     p.as_mut()
@@ -534,7 +350,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         match msg {
             WM_APP_EVENT => {
                 let (gen, ev) = *Box::from_raw(lp.0 as *mut (u64, Event));
-                a.handle_posted(gen, ev);
+                let fx = a.ctl.handle_posted(gen, ev);
+                a.run_effects(fx);
                 LRESULT(0)
             }
             WM_PAINT => {
@@ -545,20 +362,22 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             WM_ERASEBKGND => LRESULT(1),
+            // Report "caption" everywhere except the close button (and the whole widget
+            // when signed out, where a click means "sign in"), so dragging moves the window.
             WM_NCHITTEST => {
                 let (x, y) = lparam_point(lp);
                 let mut pt = POINT { x, y };
                 let _ = ScreenToClient(hwnd, &mut pt);
                 let c = a.close_rect();
                 let on_close = pt.x >= c.left && pt.x < c.right && pt.y >= c.top && pt.y < c.bottom;
-                let clickable = matches!(a.state, AppState::SignedOut);
+                let clickable = matches!(a.ctl.state, AppState::SignedOut);
                 LRESULT(if on_close || clickable { HTCLIENT } else { HTCAPTION } as isize)
             }
             WM_LBUTTONUP => {
                 let (x, y) = lparam_point(lp);
                 let c = a.close_rect();
                 let on_close = x >= c.left && x < c.right && y >= c.top && y < c.bottom;
-                let signed_out = matches!(a.state, AppState::SignedOut);
+                let signed_out = matches!(a.ctl.state, AppState::SignedOut);
                 if on_close {
                     quit(hwnd);
                 } else if signed_out {
@@ -570,7 +389,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 begin_sign_in(hwnd);
                 LRESULT(0)
             }
-            WM_NCLBUTTONDBLCLK => LRESULT(0),
+            WM_NCLBUTTONDBLCLK => LRESULT(0), // no maximize on double-click
             WM_NCRBUTTONUP | WM_RBUTTONUP => {
                 let mut pt = POINT::default();
                 let _ = GetCursorPos(&mut pt);
@@ -581,8 +400,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_EXITSIZEMOVE => {
                 let mut rc = RECT::default();
                 let _ = GetWindowRect(hwnd, &mut rc);
-                a.settings.pos = Some((rc.left, rc.top));
-                a.save_settings();
+                a.ctl.settings.pos = Some((rc.left, rc.top));
+                a.ctl.save_settings();
                 LRESULT(0)
             }
             WM_TIMER if wp.0 == TIMER_COUNTDOWN => {
@@ -609,7 +428,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             WM_ENDSESSION => {
-                a.save_settings();
+                a.ctl.save_settings();
                 LRESULT(0)
             }
             WM_DESTROY => {
@@ -643,6 +462,7 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
             return ExitCode::FAILURE;
         }
 
+        // Layered (for opacity), topmost, no taskbar button, never takes focus.
         let Ok(hwnd) = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             class,
@@ -660,22 +480,22 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
             return ExitCode::FAILURE;
         };
 
+        // The controller is created after the window exists: its sink posts to it.
+        let raw_hwnd = hwnd.0 as isize;
+        let ctl = Controller::new(
+            app_dir(),
+            settings,
+            Box::new(DpapiStore { dir: app_dir() }),
+            Arc::new(move |gen, ev| post_event(raw_hwnd, gen, ev)),
+        );
         let dpi = GetDpiForWindow(hwnd).max(96);
         let mut a = Box::new(App {
             hwnd,
-            dir: app_dir(),
-            gen: 0,
-            settings,
-            state: AppState::Loading,
-            orgs: Vec::new(),
-            current_org: None,
-            fetcher: None,
-            session: None,
+            ctl,
             sign_in,
             dpi,
             font: Font::segoe(12, false),
             font_bold: Font::segoe(12, true),
-            quitting: false,
         });
         a.rebuild_fonts();
         let pref = DWMWCP_ROUNDSMALL;
@@ -685,11 +505,11 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
             &pref as *const _ as *const _,
             std::mem::size_of_val(&pref) as u32,
         );
-        a.apply_opacity();
+        a.apply_opacity(a.ctl.settings.opacity_pct);
 
         let size = (a.s(W), a.s(a.logical_height()));
         let (areas, primary) = work_areas();
-        let (x, y) = match a.settings.pos {
+        let (x, y) = match a.ctl.settings.pos {
             Some(p) => clamp_to_work_areas(p, size, &areas, primary),
             None => default_position(size, primary),
         };
@@ -701,19 +521,21 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         SetTimer(Some(hwnd), TIMER_COUNTDOWN, 60_000, None);
 
-        match start {
-            StartMode::Session(s) => a.start_with_session(s),
+        let fx = match start {
+            StartMode::Session(s) => a.ctl.start_with_session(s),
             StartMode::NeedSignIn => {
                 // Open sign-in once the message loop is running.
-                a.set_state(AppState::SignedOut);
                 let _ = PostMessageW(Some(hwnd), WM_APP_SIGNIN, WPARAM(0), LPARAM(0));
+                a.ctl.set_state(AppState::SignedOut)
             }
             #[cfg(debug_assertions)]
             StartMode::Demo => {
-                a.set_state(AppState::Loading);
-                a.start_fetcher(Box::new(demo::DemoSource::default()), None);
+                let mut fx = a.ctl.set_state(AppState::Loading);
+                fx.extend(a.ctl.start(Box::new(demo::DemoSource::default()), None));
+                fx
             }
-        }
+        };
+        a.run_effects(fx);
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -727,9 +549,9 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
 
 #[cfg(debug_assertions)]
 mod demo {
+    use chrono::{Duration, Utc};
     use usage_core::source::{FetchError, UsageSource};
     use usage_core::usage::{Limits, Org, UsageState, Window};
-    use chrono::{Duration, Utc};
 
     /// Fake data for `--demo` (debug builds only): numbers creep up on each refresh.
     #[derive(Default)]
@@ -762,7 +584,6 @@ mod demo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use usage_core::usage::{Limits, Window};
     use windows::Win32::Graphics::Gdi::{GetDC, GetTextExtentPoint32W, ReleaseDC};
 
     fn text_width(font: &Font, s: &str) -> i32 {
@@ -795,69 +616,5 @@ mod tests {
         // Columns don't overlap each other or the close button, and fit the window.
         assert!(COL_LABEL.1 <= COL_BAR.0 && COL_BAR.1 <= COL_PCT.0 && COL_PCT.1 <= COL_REMAIN.0);
         assert!(COL_REMAIN.1 <= W - CLOSE - 4);
-    }
-
-    fn no_sign_in(_: HWND) -> Option<Session> {
-        None
-    }
-
-    fn test_app(dir: &std::path::Path) -> App {
-        App {
-            hwnd: HWND::default(),
-            dir: dir.to_path_buf(),
-            gen: 1,
-            settings: Settings::default(),
-            state: AppState::Loading,
-            orgs: Vec::new(),
-            current_org: None,
-            fetcher: None,
-            session: None,
-            sign_in: no_sign_in,
-            dpi: 96,
-            font: Font::segoe(12, false),
-            font_bold: Font::segoe(12, true),
-            quitting: false,
-        }
-    }
-
-    fn limits() -> UsageState {
-        let w = Window { utilization: 10.0, resets_at: None };
-        UsageState::Limits(Limits { session: w.clone(), weekly: w, extra: vec![] })
-    }
-
-    #[test]
-    fn late_event_after_sign_out_is_ignored() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut a = test_app(dir.path());
-        let old_gen = a.gen;
-        a.signed_out();
-        // A fetch that was in flight when the user signed out arrives afterwards.
-        a.handle_posted(old_gen, Event::Usage(limits()));
-        assert_eq!(a.state, AppState::SignedOut);
-        a.handle_posted(old_gen, Event::Error(FetchError::Network("x".into())));
-        assert_eq!(a.state, AppState::SignedOut);
-    }
-
-    #[test]
-    fn current_generation_event_is_applied() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut a = test_app(dir.path());
-        let gen = a.gen;
-        a.handle_posted(gen, Event::Usage(limits()));
-        assert!(matches!(a.state, AppState::Data { stale: false, .. }));
-    }
-
-    #[test]
-    fn menu_action_uses_snapshot_not_live_state() {
-        let snap = MenuSnapshot { orgs: vec!["org-a".into(), "org-b".into()] };
-        assert_eq!(menu_action(ID_ORG + 1, &snap), Action::Org("org-b".into()));
-        assert_eq!(menu_action(ID_ORG + 2, &snap), Action::None);
-        assert_eq!(menu_action(ID_SIGN_OUT, &snap), Action::SignOut);
-        assert_eq!(menu_action(ID_SIGN_IN, &snap), Action::SignIn);
-        assert_eq!(menu_action(ID_INTERVAL + 2, &snap), Action::Interval(INTERVAL_CHOICES[2]));
-        assert_eq!(menu_action(ID_OPACITY + 3, &snap), Action::Opacity(OPACITY_CHOICES[3]));
-        assert_eq!(menu_action(ID_REFRESH, &snap), Action::Refresh);
-        assert_eq!(menu_action(ID_QUIT, &snap), Action::Quit);
-        assert_eq!(menu_action(0, &snap), Action::None);
     }
 }
