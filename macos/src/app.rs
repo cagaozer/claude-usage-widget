@@ -7,7 +7,7 @@
 
 use crate::keychain::KeychainStore;
 use crate::menu;
-use crate::panel::{self, WidgetView};
+use crate::panel::{self, PanelDelegate, WidgetView};
 use crate::paths::app_dir;
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
@@ -38,6 +38,8 @@ struct App {
     ctl: Controller,
     panel: Retained<NSPanel>,
     view: Retained<WidgetView>,
+    /// AppKit holds window delegates weakly; this keeps ours alive.
+    _panel_delegate: Retained<PanelDelegate>,
     /// Repaints once a minute so countdowns stay current between fetches.
     countdown: Retained<NSTimer>,
     /// Org list as shown in the last context menu (see `MenuSnapshot`).
@@ -150,7 +152,7 @@ pub fn run(start: StartMode, quit_after: Option<f64>) {
 
     let opacity = ctl.settings.opacity_pct;
     let height = content_height(&ctl.view(chrono::Utc::now())) as f64;
-    let (panel, view) = panel::create(mtm, W as f64, height);
+    let (panel, view, panel_delegate) = panel::create(mtm, W as f64, height);
     panel.setAlphaValue(opacity as f64 / 100.0);
 
     // Restore the saved position if it's still on a screen, else top-right of the main one.
@@ -166,7 +168,14 @@ pub fn run(start: StartMode, quit_after: Option<f64>) {
         with_app(|a| a.view.setNeedsDisplay(true));
     });
     APP.with(|cell| {
-        *cell.borrow_mut() = Some(App { ctl, panel, view, countdown, menu_snapshot: MenuSnapshot::default() })
+        *cell.borrow_mut() = Some(App {
+            ctl,
+            panel,
+            view,
+            _panel_delegate: panel_delegate,
+            countdown,
+            menu_snapshot: MenuSnapshot::default(),
+        })
     });
 
     let need_sign_in = matches!(start, StartMode::NeedSignIn);
@@ -182,8 +191,12 @@ pub fn run(start: StartMode, quit_after: Option<f64>) {
             }
         };
         a.run_effects(fx);
-        a.panel.orderFrontRegardless();
     });
+    // Outside the borrow: ordering front may draw synchronously, and `draw` must be able
+    // to read the state.
+    if let Some(panel) = with_app(|a| a.panel.clone()) {
+        panel.orderFrontRegardless();
+    }
     if need_sign_in {
         // Open sign-in once the event loop is running.
         DispatchQueue::main().exec_async(begin_sign_in);
@@ -221,22 +234,33 @@ fn contains(r: NSRect, p: NSPoint) -> bool {
     p.x >= r.origin.x && p.x < r.origin.x + r.size.width && p.y >= r.origin.y && p.y < r.origin.y + r.size.height
 }
 
-/// Left click: ✕ quits; when signed out, anywhere signs in; otherwise drag the widget.
+/// Left click: ✕ quits; when signed out (or signing in), anywhere opens sign-in;
+/// otherwise drag the widget.
 pub fn on_mouse_down(view: &WidgetView, event: &NSEvent, p: NSPoint) {
     if contains(crate::draw::close_rect(), p) {
         quit();
         return;
     }
-    let signed_out = with_app(|a| matches!(a.ctl.state, AppState::SignedOut)).unwrap_or(false);
-    if signed_out {
-        begin_sign_in();
+    let signing = with_app(|a| matches!(a.ctl.state, AppState::SignedOut | AppState::SigningIn)).unwrap_or(false);
+    if signing {
+        begin_sign_in(); // opens sign-in, or brings an open sign-in window to the front
         return;
     }
-    // Runs a drag-tracking loop until the mouse is released. No borrow is held here.
+    // Hand the drag to the window server. The new position is saved by
+    // `on_window_moved` when the move ends. No borrow is held here.
     if let Some(window) = view.window() {
         window.performWindowDragWithEvent(event);
     }
-    with_app(|a| a.save_position());
+}
+
+/// The panel moved (`windowDidMove:`): remember where, so it reopens there even if the
+/// app is ended by logout or shutdown rather than by Quit.
+pub fn on_window_moved() {
+    with_app(|a| {
+        if !a.ctl.quitting {
+            a.save_position();
+        }
+    });
 }
 
 /// Right click: show the context menu built from the shared menu model.
@@ -272,8 +296,14 @@ pub fn on_menu_command(id: usize) {
 /// "Signed out — click to sign in" if the user closed it.
 pub fn begin_sign_in() {
     let open = with_app(|a| {
-        if matches!(a.ctl.state, AppState::SigningIn) || a.ctl.quitting {
-            return false; // already open, or shutting down
+        if a.ctl.quitting {
+            return false;
+        }
+        if matches!(a.ctl.state, AppState::SigningIn) {
+            // Already open but maybe hidden behind other apps. An accessory app has no
+            // Dock icon or Cmd-Tab entry, so this is the user's way back to it.
+            crate::signin::bring_to_front();
+            return false;
         }
         let fx = a.ctl.set_state(AppState::SigningIn);
         a.run_effects(fx);
@@ -297,7 +327,7 @@ fn sign_in_done(result: Option<Session>) {
     });
 }
 
-/// Quit: stop the countdown, hide, close any sign-in window, stop and join the fetch
+/// Quit: stop the countdown, hide, close any sign-in window, stop the fetch
 /// thread, save settings, then terminate the process. Safe to call more than once.
 pub fn quit() {
     let proceed = with_app(|a| {

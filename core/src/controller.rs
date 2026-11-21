@@ -90,9 +90,9 @@ impl Controller {
         vec![Effect::Relayout]
     }
 
-    /// Start polling `source`, replacing (and joining) any previous fetcher.
+    /// Start polling `source`, replacing any previous fetcher.
     pub fn start(&mut self, source: Box<dyn UsageSource>, last_active: Option<String>) -> Vec<Effect> {
-        self.fetcher = None; // joins the previous thread before the new one starts
+        self.stop_fetcher();
         self.gen += 1;
         let (gen, sink) = (self.gen, self.sink.clone());
         self.fetcher = Some(Fetcher::spawn(
@@ -122,7 +122,7 @@ impl Controller {
 
     /// Stop fetching and forget the session (user signed out, or it expired).
     pub fn signed_out(&mut self) -> Vec<Effect> {
-        self.fetcher = None;
+        self.stop_fetcher();
         self.gen += 1; // anything still queued from the old fetcher is now stale
         self.session = None;
         self.orgs.clear();
@@ -193,6 +193,14 @@ impl Controller {
         }
     }
 
+    /// Stop the current fetcher without waiting for an in-flight request (see
+    /// `Fetcher::detach`). Its late events are dropped by generation gating / `quitting`.
+    fn stop_fetcher(&mut self) {
+        if let Some(f) = self.fetcher.take() {
+            f.detach();
+        }
+    }
+
     fn send(&self, c: Command) {
         if let Some(f) = &self.fetcher {
             f.send(c);
@@ -203,14 +211,14 @@ impl Controller {
         let _ = self.settings.save(&self.dir);
     }
 
-    /// Stop the fetcher (joining its thread) and save settings. Returns false if quit
+    /// Stop the fetcher and save settings. Returns false if quit
     /// is already under way, so re-entrant quit requests are ignored.
     pub fn prepare_quit(&mut self) -> bool {
         if self.quitting {
             return false;
         }
         self.quitting = true;
-        self.fetcher = None;
+        self.stop_fetcher();
         self.save_settings();
         true
     }
@@ -343,6 +351,43 @@ pub(crate) mod tests {
         let fx = c.apply(Action::SignOut);
         assert!(fx.contains(&Effect::SignInCleanup));
         assert_eq!(c.state, AppState::SignedOut);
+    }
+
+    /// A request that hangs, like one on a stalled network (HTTP timeout is 15 s).
+    struct StalledSource;
+
+    impl UsageSource for StalledSource {
+        fn list_orgs(&mut self) -> Result<Vec<Org>, FetchError> {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            Err(FetchError::Network("timed out (test)".into()))
+        }
+        fn fetch_usage(&mut self, _org: &str) -> Result<UsageState, FetchError> {
+            Err(FetchError::Network("timed out (test)".into()))
+        }
+    }
+
+    fn stalled_controller() -> (tempfile::TempDir, Controller) {
+        let (dir, mut c) = controller();
+        c.make_source = |_| Box::new(StalledSource);
+        let _ = c.signed_in(session());
+        std::thread::sleep(std::time::Duration::from_millis(100)); // let the request start
+        (dir, c)
+    }
+
+    #[test]
+    fn sign_out_does_not_wait_for_a_stalled_request() {
+        let (_d, mut c) = stalled_controller();
+        let t = std::time::Instant::now();
+        let _ = c.signed_out();
+        assert!(t.elapsed() < std::time::Duration::from_secs(1), "sign-out blocked {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn quit_does_not_wait_for_a_stalled_request() {
+        let (_d, mut c) = stalled_controller();
+        let t = std::time::Instant::now();
+        assert!(c.prepare_quit());
+        assert!(t.elapsed() < std::time::Duration::from_secs(1), "quit blocked {:?}", t.elapsed());
     }
 
     #[test]

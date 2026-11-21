@@ -259,6 +259,15 @@ pub fn is_active() -> bool {
     STATE.with(|cell| cell.try_borrow().map(|s| s.is_some()).unwrap_or(true))
 }
 
+/// Bring an open sign-in window back in front of other apps.
+pub fn bring_to_front() {
+    if let Some(window) = with_state(|s| s.window.clone()) {
+        #[allow(deprecated)]
+        NSApplication::sharedApplication(mtm()).activateIgnoringOtherApps(true);
+        window.makeKeyAndOrderFront(None);
+    }
+}
+
 /// Close the sign-in window immediately without reporting (used when quitting).
 pub fn close_now() {
     drop(teardown());

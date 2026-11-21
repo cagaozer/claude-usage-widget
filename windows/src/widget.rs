@@ -119,7 +119,7 @@ impl App {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
             let _ = KillTimer(Some(self.hwnd), TIMER_COUNTDOWN);
         }
-        self.ctl.prepare_quit(); // stops and joins the fetch thread, saves settings
+        self.ctl.prepare_quit(); // stops the fetch thread (without waiting), saves settings
         drain_events(self.hwnd);
         true
     }

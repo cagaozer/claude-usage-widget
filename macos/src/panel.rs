@@ -4,13 +4,13 @@
 
 use crate::app;
 use objc2::rc::Retained;
-use objc2::runtime::NSObjectProtocol;
+use objc2::runtime::{NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSBackingStoreType, NSColor, NSEvent, NSMenuItem, NSPanel, NSView, NSWindowCollectionBehavior,
-    NSWindowStyleMask,
+    NSWindowDelegate, NSWindowStyleMask,
 };
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use objc2_foundation::{NSNotification, NSPoint, NSRect, NSSize};
 
 /// `kCGFloatingWindowLevel`: above normal windows, like a utility palette.
 const FLOATING_WINDOW_LEVEL: isize = 3;
@@ -63,14 +63,36 @@ define_class!(
     }
 );
 
+define_class!(
+    // Window delegate of the panel: reports moves so the position can be saved.
+    #[unsafe(super(objc2_foundation::NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "CUWPanelDelegate"]
+    pub struct PanelDelegate;
+
+    unsafe impl NSObjectProtocol for PanelDelegate {}
+
+    unsafe impl NSWindowDelegate for PanelDelegate {
+        #[unsafe(method(windowDidMove:))]
+        fn window_did_move(&self, _notification: &NSNotification) {
+            app::on_window_moved();
+        }
+    }
+);
+
 impl WidgetView {
     fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<WidgetView> {
         unsafe { msg_send![WidgetView::alloc(mtm), initWithFrame: frame] }
     }
 }
 
-/// Create the (still hidden) widget panel of `width × height` points and its view.
-pub fn create(mtm: MainThreadMarker, width: f64, height: f64) -> (Retained<NSPanel>, Retained<WidgetView>) {
+/// Create the (still hidden) widget panel of `width × height` points, its view, and its
+/// delegate (which the caller must keep alive).
+pub fn create(
+    mtm: MainThreadMarker,
+    width: f64,
+    height: f64,
+) -> (Retained<NSPanel>, Retained<WidgetView>, Retained<PanelDelegate>) {
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, height));
     let style = NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel;
     let panel: Retained<NSPanel> = unsafe {
@@ -104,5 +126,7 @@ pub fn create(mtm: MainThreadMarker, width: f64, height: f64) -> (Retained<NSPan
     }
     let view = WidgetView::new(mtm, frame);
     panel.setContentView(Some(&view));
-    (panel, view)
+    let delegate: Retained<PanelDelegate> = unsafe { msg_send![PanelDelegate::alloc(mtm), init] };
+    panel.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+    (panel, view, delegate)
 }

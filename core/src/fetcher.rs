@@ -103,6 +103,15 @@ impl Fetcher {
     pub fn send(&self, c: Command) {
         let _ = self.tx.send(c);
     }
+
+    /// Ask the thread to stop without waiting for it. A request already in flight (up to
+    /// the 15 s HTTP timeout on a stalled network) finishes in the background, then the
+    /// thread exits; whatever it reports meanwhile carries an outdated generation and is
+    /// ignored by the controller. Used so sign-out and quit never freeze the UI.
+    pub fn detach(mut self) {
+        let _ = self.tx.send(Command::Stop);
+        drop(self.handle.take()); // dropping a JoinHandle detaches the thread
+    }
 }
 
 impl Drop for Fetcher {
