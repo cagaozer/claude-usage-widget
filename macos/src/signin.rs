@@ -103,6 +103,16 @@ define_class!(
 
     // Page-load results, logged in debug builds only (see `dlog`).
     unsafe impl WKNavigationDelegate for SignInDelegate {
+        #[unsafe(method(webView:didStartProvisionalNavigation:))]
+        fn did_start(&self, web: &WKWebView, _nav: Option<&WKNavigation>) {
+            dlog(&format!("started loading {}", page(web)));
+        }
+
+        #[unsafe(method(webViewWebContentProcessDidTerminate:))]
+        fn content_process_died(&self, _web: &WKWebView) {
+            dlog("web content process terminated");
+        }
+
         #[unsafe(method(webView:didFinishNavigation:))]
         fn did_finish(&self, web: &WKWebView, _nav: Option<&WKNavigation>) {
             dlog(&format!("loaded {}", page(web)));
@@ -200,11 +210,18 @@ fn finish(result: Option<Session>) {
 
 /// Look for the session cookie; called once a second.
 fn poll_cookies() {
+    if cfg!(debug_assertions) {
+        with_state(|s| {
+            let (loading, progress) = unsafe { (s.web.isLoading(), s.web.estimatedProgress()) };
+            dlog(&format!("tick: loading={loading} progress={progress:.2} page={}", page(&s.web)));
+        });
+    }
     let Some(store) = with_state(|s| unsafe { s.web.configuration().websiteDataStore().httpCookieStore() }) else {
         return;
     };
     let block = RcBlock::new(|cookies: NonNull<NSArray<NSHTTPCookie>>| {
         let cookies = unsafe { cookies.as_ref() };
+        dlog(&format!("cookie check: {} cookies", cookies.count()));
         let triples: Vec<(String, String, String)> = cookies
             .iter()
             .map(|c| (c.name().to_string(), c.domain().to_string(), c.value().to_string()))
@@ -257,7 +274,8 @@ pub fn sign_in(mtm: MainThreadMarker) -> Option<Session> {
         window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     }
     if let Some(url) = NSURL::URLWithString(&NSString::from_str(LOGIN_URL)) {
-        let _ = unsafe { web.loadRequest(&NSURLRequest::requestWithURL(&url)) };
+        let nav = unsafe { web.loadRequest(&NSURLRequest::requestWithURL(&url)) };
+        dlog(&format!("load requested (navigation {})", if nav.is_some() { "created" } else { "missing" }));
     }
 
     STATE.with(|cell| {
