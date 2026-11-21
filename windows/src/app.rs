@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Windows start-up: single-instance guard, COM init, settings/session loading, and the
 //! sign-in hook the widget calls.
 

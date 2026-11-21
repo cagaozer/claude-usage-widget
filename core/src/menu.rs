@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The right-click menu as plain data, so Windows and macOS show identical menus and
 //! interpret clicks identically. Each platform only turns `MenuEntry`s into native menu
 //! items and maps the clicked item's id back through `menu_action`.

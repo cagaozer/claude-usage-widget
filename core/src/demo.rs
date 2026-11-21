@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Fake usage data for `--demo` (debug builds only), used for screenshots and the
 //! automated launch/leak checks. Numbers creep up on each refresh so changes are visible.
 

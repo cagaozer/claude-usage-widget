@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Background thread that polls a `UsageSource` and reports `Event`s through a sink.
 
 use crate::source::{FetchError, UsageSource};

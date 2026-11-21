@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Embeds the Windows icon and application manifest into the exe.
+
 fn main() {
     println!("cargo:rerun-if-changed=resources.rc");
     println!("cargo:rerun-if-changed=app.manifest");

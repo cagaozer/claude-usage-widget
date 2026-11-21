@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! claude.ai usage response model and parsing.
 
 use chrono::{DateTime, Utc};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! macOS sign-in: claude.ai's real login page in a WKWebView, in its own window.
 //!
 //! - The web view uses a non-persistent data store, so cookies and cache live only in

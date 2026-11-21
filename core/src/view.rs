@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Pure mapping from application state to what the widget draws.
 
 use crate::format::{format_remaining, level, Level};

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Platform-neutral core of Claude Usage Widget.
 //!
 //! Everything here is plain Rust with no OS APIs, so it is shared by the Windows and

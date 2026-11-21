@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Paints the widget with AppKit, using the same layout and colors as Windows
 //! (`usage_core::layout`). Coordinates are points in a flipped view (y grows downwards),
 //! so the numbers match the Windows code one-to-one.

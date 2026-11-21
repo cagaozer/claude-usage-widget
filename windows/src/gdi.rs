@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! RAII wrappers so every GDI object is released exactly once.
 
 use windows::core::PCWSTR;

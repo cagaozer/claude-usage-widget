@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Keep the widget on a visible monitor.
 
 /// A screen rectangle in pixels (Windows) or points (macOS), y growing downwards.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Single-instance guard based on an OS file lock (used by the macOS app; Windows uses a
 //! named mutex). The OS releases the lock when the process exits, even after a crash, so
 //! a stale lock file never blocks the next launch.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The always-on-top widget window: painting, dragging, menu, and Win32 event handling.
 //!
 //! App logic (state, fetching, menu contents, settings) lives in `usage_core::Controller`;

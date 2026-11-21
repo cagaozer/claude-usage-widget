@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! macOS application: owns the shared `Controller`, the widget panel and its timers, and
 //! connects AppKit events to the controller.
 //!

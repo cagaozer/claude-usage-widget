@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Turns the shared menu model (`usage_core::menu`) into a native `NSMenu`. Every item
 //! targets the widget view's `menuItemClicked:` and carries its command id as the tag.
 

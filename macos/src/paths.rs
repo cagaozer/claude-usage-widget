@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Where the macOS build keeps its files.
 
 use std::path::PathBuf;

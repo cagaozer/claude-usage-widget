@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The widget's state machine, shared by both platforms.
 //!
 //! `Controller` owns the app state, the settings, the background fetcher and the stored

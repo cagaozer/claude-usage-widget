@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Widget geometry and colors shared by both platforms.
 //!
 //! Units are logical pixels on Windows (scaled by the monitor DPI at draw time) and

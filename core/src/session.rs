@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The claude.ai web session (the `sessionKey` cookie) and the interface each platform
 //! implements to keep it between runs (DPAPI on Windows, Keychain on macOS).
 

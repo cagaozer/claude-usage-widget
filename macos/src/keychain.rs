@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! macOS session storage: the claude.ai session lives in the user's login Keychain as a
 //! generic password (service "ClaudeUsageWidget", account "claude.ai"), never on disk.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Where usage data comes from. `HttpSource` talks to claude.ai with the user's web session.
 
 use crate::session::Session;

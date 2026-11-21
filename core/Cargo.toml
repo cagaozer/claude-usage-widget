@@ -3,7 +3,7 @@ name = "usage_core"
 version = "0.1.0"
 edition = "2021"
 description = "Platform-neutral core of Claude Usage Widget: usage parsing, fetching, state and layout"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! The floating widget window: a borderless, non-activating `NSPanel` that floats above
 //! other apps on every Space, with a custom view that draws the widget and forwards
 //! mouse input to `app`.

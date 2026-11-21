@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Windows session storage: the claude.ai session, encrypted with DPAPI for the current
 //! Windows user and written to `%APPDATA%\ClaudeUsageWidget\session.bin`.
 

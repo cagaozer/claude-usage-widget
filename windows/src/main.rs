@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Claude Usage Widget for Windows: entry point.
 //!
 //! Every module is Windows-only. On other targets this crate builds an empty program so

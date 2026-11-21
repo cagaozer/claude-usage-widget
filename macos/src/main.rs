@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Claude Usage Widget for macOS: entry point.
 //!
 //! Every module is macOS-only. On other targets this crate builds an empty program so

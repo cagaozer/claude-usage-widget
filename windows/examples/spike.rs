@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Throwaway spike: does a plain HTTPS client get usage JSON from claude.ai?
 //!
 //! Run in your own terminal: `cargo run --example spike`

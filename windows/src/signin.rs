@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! claude.ai sign-in in a WebView2 window. Created on demand and fully torn down afterwards.
 //!
 //! The user signs in on the real claude.ai page with any method it offers. We poll the

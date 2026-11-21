@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! User settings persisted as `settings.json` in the platform's app data folder
 //! (`%APPDATA%\ClaudeUsageWidget` on Windows, `~/Library/Application Support/ClaudeUsageWidget` on macOS).
 

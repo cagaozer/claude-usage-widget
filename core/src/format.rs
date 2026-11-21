@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Countdown text and bar color thresholds.
 
 use chrono::{DateTime, Utc};
