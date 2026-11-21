@@ -1,0 +1,75 @@
+# Builds and tests the Windows and macOS widgets.
+#
+# macOS runner minutes are expensive on private repos, so the macOS job runs only when
+# shared or Mac code changes, on version tags, or when started by hand.
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace
+      - name: Build release exe
+        run: cargo build --release -p claude_usage_widget_win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeUsageWidget.exe
+          path: target/release/ClaudeUsageWidget.exe
+          if-no-files-found: error
+
+  # Decides whether this push touched anything the macOS app depends on.
+  mac-changes:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      mac: ${{ steps.filter.outputs.mac }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            mac:
+              - 'core/**'
+              - 'macos/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/**'
+
+  macos:
+    needs: mac-changes
+    # Run when Mac-relevant files changed, on tags, or on manual runs (where
+    # mac-changes is skipped, hence the !cancelled()).
+    if: >-
+      !cancelled() && (
+        needs.mac-changes.outputs.mac == 'true' ||
+        startsWith(github.ref, 'refs/tags/v') ||
+        github.event_name == 'workflow_dispatch'
+      )
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test shared core and Mac crate
+        run: cargo test -p usage_core -p claude_usage_widget_mac
+      - name: Build (debug and release)
+        run: |
+          cargo build -p claude_usage_widget_mac
+          cargo build --release -p claude_usage_widget_mac
