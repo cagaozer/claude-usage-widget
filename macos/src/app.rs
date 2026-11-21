@@ -2,8 +2,8 @@
 //! connects AppKit events to the controller.
 //!
 //! All state lives in a main-thread `thread_local`. Handlers borrow it only briefly and
-//! never across anything that runs a nested event loop (the context menu, the modal
-//! sign-in window), because AppKit can call back into this module from inside those loops.
+//! never across anything that runs a nested event loop (the context menu, window
+//! dragging), because AppKit can call back into this module from inside those loops.
 
 use crate::keychain::KeychainStore;
 use crate::menu;
@@ -268,8 +268,8 @@ pub fn on_menu_command(id: usize) {
     }
 }
 
-/// Open the sign-in window and wait for it (modal), then start fetching or show
-/// "Signed out — click to sign in".
+/// Open the sign-in window. When it finishes, start fetching, or show
+/// "Signed out — click to sign in" if the user closed it.
 pub fn begin_sign_in() {
     let open = with_app(|a| {
         if matches!(a.ctl.state, AppState::SigningIn) || a.ctl.quitting {
@@ -279,29 +279,26 @@ pub fn begin_sign_in() {
         a.run_effects(fx);
         true
     });
-    if open != Some(true) {
-        return;
+    if open == Some(true) {
+        crate::signin::start(mtm(), sign_in_done);
     }
-    // Modal loop; no borrow of the app state is held while it runs.
-    let result = crate::signin::sign_in(mtm());
-    let quitting = with_app(|a| {
+}
+
+fn sign_in_done(result: Option<Session>) {
+    with_app(|a| {
         if a.ctl.quitting {
-            return true;
+            return;
         }
         let fx = match result {
             Some(session) => a.ctl.signed_in(session),
             None => a.ctl.set_state(AppState::SignedOut),
         };
         a.run_effects(fx);
-        false
     });
-    if quitting == Some(true) {
-        terminate(); // quit was requested while the sign-in window was open
-    }
 }
 
-/// Quit: stop the countdown, hide, stop and join the fetch thread, save settings, then
-/// terminate the process. Safe to call more than once.
+/// Quit: stop the countdown, hide, close any sign-in window, stop and join the fetch
+/// thread, save settings, then terminate the process. Safe to call more than once.
 pub fn quit() {
     let proceed = with_app(|a| {
         if a.ctl.quitting {
@@ -313,13 +310,8 @@ pub fn quit() {
         a.ctl.prepare_quit()
     })
     .unwrap_or(false);
-    if !proceed {
-        return;
-    }
-    if crate::signin::is_active() {
-        // End the modal sign-in first; begin_sign_in terminates once it has unwound.
-        crate::signin::cancel();
-    } else {
+    if proceed {
+        crate::signin::close_now();
         terminate();
     }
 }

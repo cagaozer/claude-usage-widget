@@ -1,4 +1,4 @@
-//! macOS sign-in: claude.ai's real login page in a WKWebView, shown in a modal window.
+//! macOS sign-in: claude.ai's real login page in a WKWebView, in its own window.
 //!
 //! - The web view uses a non-persistent data store, so cookies and cache live only in
 //!   memory and vanish when the window closes (nothing to clean up on disk).
@@ -7,10 +7,11 @@
 //!   with the configuration WebKit supplies, so `window.opener` works and the pop-up
 //!   can hand the result back to the login page. At most one pop-up exists at a time.
 //! - Once a second the cookie store is checked; when a claude.ai `sessionKey` appears,
-//!   the window closes and the session is returned. Cookie values are never logged.
+//!   the window closes and the session is handed back. Cookie values are never logged.
 
 use crate::app::schedule_timer;
 use block2::RcBlock;
+use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
@@ -36,9 +37,13 @@ struct State {
     _delegate: Retained<SignInDelegate>,
     popup: Option<(Retained<NSWindow>, Retained<WKWebView>)>,
     timer: Option<Retained<NSTimer>>,
-    result: Option<Session>,
+    /// Called once with the outcome.
+    on_done: OnDone,
+    /// Set by the first `finish`; later ones (e.g. window close during teardown) are ignored.
     finished: bool,
 }
+
+type OnDone = Box<dyn FnOnce(Option<Session>)>;
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
@@ -192,20 +197,42 @@ fn close_popup() {
     }
 }
 
-/// End the modal session with `result` (None = cancelled).
+/// Sign-in is over (`result` None = cancelled). Tear down and report on the next turn
+/// of the event loop, not from inside the WebKit/AppKit callback that got us here.
 fn finish(result: Option<Session>) {
-    let first = with_state(|s| {
-        if s.finished {
-            return false;
-        }
-        s.finished = true;
-        s.result = result;
-        true
-    });
+    let first = with_state(|s| !std::mem::replace(&mut s.finished, true));
     if first == Some(true) {
-        // abortModal (not stopModal) also works from timers and completion handlers.
-        NSApplication::sharedApplication(mtm()).abortModal();
+        DispatchQueue::main().exec_async(move || {
+            if let Some(on_done) = teardown() {
+                on_done(result);
+            }
+        });
     }
+}
+
+/// Close the windows and release everything the sign-in created. Returns the
+/// completion callback if sign-in was still open.
+fn teardown() -> Option<OnDone> {
+    let state = STATE.with(|cell| cell.borrow_mut().take())?;
+    if let Some((window, web)) = &state.popup {
+        unsafe {
+            web.stopLoading();
+            web.setUIDelegate(None);
+            window.setDelegate(None);
+        }
+        window.close();
+    }
+    if let Some(t) = &state.timer {
+        t.invalidate();
+    }
+    unsafe {
+        state.web.stopLoading();
+        state.web.setUIDelegate(None);
+        state.web.setNavigationDelegate(None);
+        state.window.setDelegate(None);
+    }
+    state.window.close();
+    Some(state.on_done)
 }
 
 /// Look for the session cookie; called once a second.
@@ -239,16 +266,20 @@ pub fn is_active() -> bool {
     STATE.with(|cell| cell.try_borrow().map(|s| s.is_some()).unwrap_or(true))
 }
 
-/// Close the sign-in window as if the user cancelled (used when quitting).
-pub fn cancel() {
-    finish(None);
+/// Close the sign-in window immediately without reporting (used when quitting).
+pub fn close_now() {
+    drop(teardown());
 }
 
-/// Show the sign-in window and block (in a modal loop) until the user signs in or
-/// closes it. Returns the session, or None if cancelled.
-pub fn sign_in(mtm: MainThreadMarker) -> Option<Session> {
+/// Open the sign-in window. Returns at once; `on_done` runs later on the main thread
+/// with the session, or None if the user closed the window. Does nothing (returns
+/// false) if a sign-in window is already open.
+///
+/// Not modal on purpose: WebKit talks to its helper processes through the main run
+/// loop, and a modal session starved it (the page never loaded).
+pub fn start(mtm: MainThreadMarker, on_done: impl FnOnce(Option<Session>) + 'static) -> bool {
     if is_active() {
-        return None;
+        return false;
     }
     let window = new_window(mtm, "Sign in to Claude", WIDTH, HEIGHT);
 
@@ -278,53 +309,22 @@ pub fn sign_in(mtm: MainThreadMarker) -> Option<Session> {
         dlog(&format!("load requested (navigation {})", if nav.is_some() { "created" } else { "missing" }));
     }
 
+    let timer = schedule_timer(1.0, true, poll_cookies);
     STATE.with(|cell| {
         *cell.borrow_mut() = Some(State {
             window: window.clone(),
             web,
             _delegate: delegate,
             popup: None,
-            timer: None,
-            result: None,
+            timer: Some(timer),
+            on_done: Box::new(on_done),
             finished: false,
         })
     });
-    // The timer runs in common modes, so it keeps firing inside the modal loop below.
-    let timer = schedule_timer(1.0, true, poll_cookies);
-    with_state(|s| s.timer = Some(timer));
 
-    // Our app is an accessory and normally never active; activate so the window gets focus.
-    let ns_app = NSApplication::sharedApplication(mtm);
+    // The app is an accessory and normally never active; activate so the window gets focus.
     #[allow(deprecated)]
-    ns_app.activateIgnoringOtherApps(true);
+    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
     window.makeKeyAndOrderFront(None);
-    ns_app.runModalForWindow(&window); // returns after finish() calls abortModal
-
-    // Tear down everything the sign-in created.
-    let state = STATE.with(|cell| cell.borrow_mut().take());
-    close_popup_of(&state);
-    let state = state?;
-    if let Some(t) = &state.timer {
-        t.invalidate();
-    }
-    unsafe {
-        state.web.stopLoading();
-        state.web.setUIDelegate(None);
-        state.web.setNavigationDelegate(None);
-        state.window.setDelegate(None);
-    }
-    state.window.close();
-    state.result
-}
-
-/// Close a pop-up still referenced by `state` (the thread_local is already emptied).
-fn close_popup_of(state: &Option<State>) {
-    if let Some((window, web)) = state.as_ref().and_then(|s| s.popup.as_ref()) {
-        unsafe {
-            web.stopLoading();
-            web.setUIDelegate(None);
-            window.setDelegate(None);
-        }
-        window.close();
-    }
+    true
 }

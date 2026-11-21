@@ -50,7 +50,7 @@ wait "$PID"
 echo "ok: app quit cleanly (exit code $?)"
 
 # Sign-in window: opens claude.ai's login page (screenshot for a human to look at) and
-# must quit cleanly even while that modal window is open. What the page shows is
+# must quit cleanly even while that window is open. What the page shows is
 # informational only; CI can't sign in.
 "$APP_BIN" --signin-smoke --quit-after 25 &
 PID=$!
