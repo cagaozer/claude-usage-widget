@@ -77,13 +77,16 @@ Requires Windows 10/11 x64, [Rust](https://rustup.rs) (stable, MSVC toolchain) a
 Visual Studio Build Tools (C++ workload).
 
 ```powershell
-cargo test
-cargo build --release
+cargo test --workspace
+cargo build --release -p claude_usage_widget_win
 # -> target\release\ClaudeUsageWidget.exe
 ```
 
+The code is a Cargo workspace: `core/` is shared platform-neutral logic, `windows/` the
+Windows app.
+
 Debug builds accept `--demo` to show fake data without signing in:
-`cargo run -- --demo`.
+`cargo run -p claude_usage_widget_win -- --demo`.
 
 `scripts\leakcheck.ps1 -Minutes 180` samples the running widget's memory, handle and GDI
 counts once a minute to check for leaks.
