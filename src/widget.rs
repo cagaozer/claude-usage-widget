@@ -23,11 +23,16 @@ const WM_APP_SIGNIN: u32 = WM_APP + 2;
 const TIMER_COUNTDOWN: usize = 1;
 
 // Logical (96-DPI) layout.
-const W: i32 = 230;
+const W: i32 = 252;
 const PAD: i32 = 8;
 const ROW_H: i32 = 20;
 const NOTE_H: i32 = 16;
 const CLOSE: i32 = 14;
+// Row columns as (left, right) in logical px.
+const COL_LABEL: (i32, i32) = (PAD, 74);
+const COL_BAR: (i32, i32) = (76, 124);
+const COL_PCT: (i32, i32) = (126, 160);
+const COL_REMAIN: (i32, i32) = (166, W - CLOSE - 6);
 
 const BG: COLORREF = rgb(0x1F, 0x1F, 0x1E);
 const TEXT: COLORREF = rgb(0xEC, 0xEC, 0xEA);
@@ -45,6 +50,40 @@ const ID_ORG: usize = 200;
 const ID_SIGN_OUT: usize = 300;
 const ID_QUIT: usize = 301;
 
+const ID_SIGN_IN: usize = 302;
+
+/// What a menu click means, decided from the menu exactly as it was shown.
+#[derive(Debug, Clone, PartialEq)]
+enum Action {
+    None,
+    Refresh,
+    Interval(u32),
+    Opacity(u8),
+    Org(String),
+    SignOut,
+    SignIn,
+    Quit,
+}
+
+/// The org uuids listed in the menu, in menu order.
+struct MenuSnapshot {
+    orgs: Vec<String>,
+}
+
+fn menu_action(id: usize, snap: &MenuSnapshot) -> Action {
+    let in_range = |base: usize, len: usize| (base..base + len).contains(&id);
+    match id {
+        ID_REFRESH => Action::Refresh,
+        ID_SIGN_OUT => Action::SignOut,
+        ID_SIGN_IN => Action::SignIn,
+        ID_QUIT => Action::Quit,
+        _ if in_range(ID_INTERVAL, INTERVAL_CHOICES.len()) => Action::Interval(INTERVAL_CHOICES[id - ID_INTERVAL]),
+        _ if in_range(ID_OPACITY, OPACITY_CHOICES.len()) => Action::Opacity(OPACITY_CHOICES[id - ID_OPACITY]),
+        _ if in_range(ID_ORG, snap.orgs.len()) => Action::Org(snap.orgs[id - ID_ORG].clone()),
+        _ => Action::None,
+    }
+}
+
 pub enum StartMode {
     NeedSignIn,
     Session(Session),
@@ -57,6 +96,11 @@ pub type SignIn = fn(HWND) -> Option<Session>;
 
 struct App {
     hwnd: HWND,
+    /// Folder for settings.json / session.bin (a temp dir in tests).
+    dir: std::path::PathBuf,
+    /// Bumped whenever the fetcher is replaced or stopped; events from older
+    /// fetchers are ignored.
+    gen: u64,
     settings: Settings,
     state: AppState,
     orgs: Vec<Org>,
@@ -113,13 +157,15 @@ impl App {
 
     fn start_fetcher(&mut self, source: Box<dyn UsageSource>, last_active: Option<String>) {
         self.fetcher = None; // joins any previous thread first
+        self.gen += 1;
+        let gen = self.gen;
         let hwnd = self.hwnd.0 as isize;
         self.fetcher = Some(Fetcher::spawn(
             source,
             self.settings.interval_secs,
             self.settings.org_id.clone(),
             last_active,
-            move |ev| post_event(hwnd, ev),
+            move |ev| post_event(hwnd, gen, ev),
         ));
     }
 
@@ -130,27 +176,22 @@ impl App {
         self.start_fetcher(Box::new(HttpSource::new(session)), last);
     }
 
-    fn begin_sign_in(&mut self) {
-        if matches!(self.state, AppState::SigningIn) {
-            return; // already open (nested message loop)
-        }
-        self.set_state(AppState::SigningIn);
-        unsafe {
-            let _ = UpdateWindow(self.hwnd);
-        }
-        match (self.sign_in)(self.hwnd) {
-            Some(session) => self.start_with_session(session),
-            None => self.set_state(AppState::SignedOut),
-        }
-    }
 
     fn signed_out(&mut self) {
         self.fetcher = None;
+        self.gen += 1; // anything still queued from the old fetcher is now stale
         self.session = None;
         self.orgs.clear();
         self.current_org = None;
-        clear_session(&app_dir());
+        clear_session(&self.dir);
         self.set_state(AppState::SignedOut);
+    }
+
+    /// Apply an event posted by fetcher generation `gen`.
+    fn handle_posted(&mut self, gen: u64, ev: Event) {
+        if gen == self.gen && !self.quitting {
+            self.on_event(ev);
+        }
     }
 
     fn on_event(&mut self, ev: Event) {
@@ -174,7 +215,7 @@ impl App {
     }
 
     fn save_settings(&self) {
-        let _ = self.settings.save(&app_dir());
+        let _ = self.settings.save(&self.dir);
     }
 
     fn apply_opacity(&self) {
@@ -189,9 +230,11 @@ impl App {
         RECT { left: w - c - p, top: p, right: w - p, bottom: p + c }
     }
 
-    fn quit(&mut self) {
+    /// Release everything; the caller then destroys the window (which frees `App`).
+    /// Returns false if already quitting.
+    fn prepare_quit(&mut self) -> bool {
         if self.quitting {
-            return;
+            return false;
         }
         self.quitting = true;
         unsafe {
@@ -201,9 +244,7 @@ impl App {
         self.fetcher = None; // signals Stop and joins the fetch thread
         drain_events(self.hwnd);
         self.save_settings();
-        unsafe {
-            let _ = DestroyWindow(self.hwnd);
-        }
+        true
     }
 
     fn paint(&self, hdc: HDC) {
@@ -237,11 +278,11 @@ impl App {
                         SetTextColor(dc, text);
                         {
                             let _b = Selected::font(dc, &self.font_bold);
-                            draw_text(dc, &row.label, cell(PAD, 66), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                            draw_text(dc, &row.label, cell(COL_LABEL.0, COL_LABEL.1), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                         }
                         // Bar.
                         let mid = (top + bottom) / 2;
-                        let bar = RECT { left: self.s(68), top: mid - self.s(3), right: self.s(126), bottom: mid + self.s(3) };
+                        let bar = RECT { left: self.s(COL_BAR.0), top: mid - self.s(3), right: self.s(COL_BAR.1), bottom: mid + self.s(3) };
                         FillRect(dc, &bar, track.0);
                         let filled = RECT {
                             right: bar.left + ((bar.right - bar.left) as f64 * row.fill).round() as i32,
@@ -259,9 +300,9 @@ impl App {
                         let fill = Brush::solid(color);
                         FillRect(dc, &filled, fill.0);
 
-                        draw_text(dc, &row.pct_text, cell(128, 164), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+                        draw_text(dc, &row.pct_text, cell(COL_PCT.0, COL_PCT.1), DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
                         SetTextColor(dc, DIM);
-                        draw_text(dc, &row.remaining, cell(170, W - CLOSE - 6), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                        draw_text(dc, &row.remaining, cell(COL_REMAIN.0, COL_REMAIN.1), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
                     }
                     if let Some(n) = note {
                         SetTextColor(dc, DIM);
@@ -275,9 +316,10 @@ impl App {
         }
     }
 
-    fn show_menu(&mut self, x: i32, y: i32) {
+    /// Build the popup menu for the current state. Caller tracks and destroys it.
+    fn build_menu(&self) -> Option<(HMENU, MenuSnapshot)> {
         unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
+            let menu = CreatePopupMenu().ok()?;
             let add = |m: HMENU, id: usize, text: &str, checked: bool, enabled: bool| {
                 let wide: Vec<u16> = text.encode_utf16().chain([0]).collect();
                 let mut flags = MF_STRING;
@@ -294,11 +336,12 @@ impl App {
                 let _ = AppendMenuW(parent, MF_POPUP, child.0 as usize, PCWSTR(wide.as_ptr()));
             };
             let signed_in = self.fetcher.is_some();
+            let mut snap = MenuSnapshot { orgs: Vec::new() };
 
             add(menu, ID_REFRESH, "Refresh now", false, signed_in);
             if let Ok(m) = CreatePopupMenu() {
                 for (i, s) in INTERVAL_CHOICES.iter().enumerate() {
-                    let label = if *s < 60 { format!("{s} s") } else if *s == 60 { "60 s".into() } else { format!("{} min", s / 60) };
+                    let label = if *s <= 60 { format!("{s} s") } else { format!("{} min", s / 60) };
                     add(m, ID_INTERVAL + i, &label, self.settings.interval_secs == *s, true);
                 }
                 sub(menu, m, "Refresh every");
@@ -313,6 +356,7 @@ impl App {
                 if let Ok(m) = CreatePopupMenu() {
                     for (i, o) in self.orgs.iter().enumerate() {
                         add(m, ID_ORG + i, &o.name, self.current_org.as_deref() == Some(&o.uuid), true);
+                        snap.orgs.push(o.uuid.clone());
                     }
                     sub(menu, m, "Organization");
                 }
@@ -321,57 +365,103 @@ impl App {
             if signed_in || self.session.is_some() {
                 add(menu, ID_SIGN_OUT, "Sign out", false, true);
             } else {
-                add(menu, ID_SIGN_OUT, "Sign in", false, true);
+                add(menu, ID_SIGN_IN, "Sign in", false, true);
             }
             add(menu, ID_QUIT, "Quit", false, true);
-
-            // Required so the menu closes when the user clicks elsewhere.
-            let _ = SetForegroundWindow(self.hwnd);
-            let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, x, y, None, self.hwnd, None);
-            let _ = DestroyMenu(menu); // also destroys submenus
-            self.on_command(cmd.0 as usize);
+            Some((menu, snap))
         }
     }
 
-    fn on_command(&mut self, id: usize) {
-        match id {
-            ID_REFRESH => {
+    /// Apply a non-modal menu action. Sign-in and Quit are handled by the caller.
+    fn apply(&mut self, action: Action) {
+        match action {
+            Action::Refresh => {
                 if let Some(f) = &self.fetcher {
                     f.send(Command::RefreshNow);
                 }
             }
-            i if (ID_INTERVAL..ID_INTERVAL + INTERVAL_CHOICES.len()).contains(&i) => {
-                self.settings.interval_secs = INTERVAL_CHOICES[i - ID_INTERVAL];
+            Action::Interval(secs) => {
+                self.settings.interval_secs = secs;
                 if let Some(f) = &self.fetcher {
-                    f.send(Command::SetInterval(self.settings.interval_secs));
+                    f.send(Command::SetInterval(secs));
                 }
                 self.save_settings();
             }
-            i if (ID_OPACITY..ID_OPACITY + OPACITY_CHOICES.len()).contains(&i) => {
-                self.settings.opacity_pct = OPACITY_CHOICES[i - ID_OPACITY];
+            Action::Opacity(pct) => {
+                self.settings.opacity_pct = pct;
                 self.apply_opacity();
                 self.save_settings();
             }
-            i if i >= ID_ORG && i < ID_ORG + self.orgs.len() => {
-                let id = self.orgs[i - ID_ORG].uuid.clone();
+            Action::Org(id) => {
                 self.settings.org_id = Some(id.clone());
                 self.current_org = Some(id.clone());
                 self.save_settings();
-                self.set_state(AppState::Loading);
+                if self.fetcher.is_some() {
+                    self.set_state(AppState::Loading);
+                }
                 if let Some(f) = &self.fetcher {
                     f.send(Command::SetOrg(id));
                 }
             }
-            ID_SIGN_OUT => {
-                if self.fetcher.is_some() || self.session.is_some() {
-                    self.signed_out();
-                    crate::signin_cleanup();
-                } else {
-                    self.begin_sign_in();
-                }
+            Action::SignOut => {
+                self.signed_out();
+                crate::signin_cleanup();
             }
-            ID_QUIT => self.quit(),
-            _ => {}
+            Action::None | Action::SignIn | Action::Quit => {}
+        }
+    }
+}
+
+// Modal operations. These take the HWND, not `&mut App`: the menu and the sign-in
+// window run nested message loops that re-enter `wndproc`, so no reference to `App`
+// may be held across them. `App` is looked up again afterwards.
+
+fn show_menu(hwnd: HWND, x: i32, y: i32) {
+    let Some((menu, snap)) = (unsafe { app(hwnd) }).and_then(|a| a.build_menu()) else { return };
+    let cmd = unsafe {
+        // Required so the menu closes when the user clicks elsewhere.
+        let _ = SetForegroundWindow(hwnd);
+        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, x, y, None, hwnd, None);
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = DestroyMenu(menu); // also destroys submenus
+        cmd.0 as usize
+    };
+    match menu_action(cmd, &snap) {
+        Action::SignIn => begin_sign_in(hwnd),
+        Action::Quit => quit(hwnd),
+        action => {
+            if let Some(a) = unsafe { app(hwnd) } {
+                a.apply(action);
+            }
+        }
+    }
+}
+
+fn begin_sign_in(hwnd: HWND) {
+    let sign_in = {
+        let Some(a) = (unsafe { app(hwnd) }) else { return };
+        if matches!(a.state, AppState::SigningIn) || a.quitting {
+            return; // already open (nested message loop)
+        }
+        a.set_state(AppState::SigningIn);
+        a.sign_in
+    };
+    unsafe {
+        let _ = UpdateWindow(hwnd);
+    }
+    let result = sign_in(hwnd);
+    let Some(a) = (unsafe { app(hwnd) }) else { return };
+    match result {
+        Some(session) => a.start_with_session(session),
+        None => a.set_state(AppState::SignedOut),
+    }
+}
+
+fn quit(hwnd: HWND) {
+    let proceed = unsafe { app(hwnd) }.map(|a| a.prepare_quit()).unwrap_or(false);
+    if proceed {
+        unsafe {
+            let _ = DestroyWindow(hwnd); // frees App in WM_NCDESTROY
         }
     }
 }
@@ -385,8 +475,8 @@ fn draw_text(dc: HDC, s: &str, mut rc: RECT, fmt: DRAW_TEXT_FORMAT) {
 
 /// Called on the fetch thread. Ownership of the boxed event passes to the window;
 /// if the post fails (window gone), the box is reclaimed and dropped here.
-fn post_event(hwnd: isize, ev: Event) {
-    let raw = Box::into_raw(Box::new(ev));
+fn post_event(hwnd: isize, gen: u64, ev: Event) {
+    let raw = Box::into_raw(Box::new((gen, ev)));
     let ok = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_APP_EVENT, WPARAM(0), LPARAM(raw as isize)) };
     if ok.is_err() {
         drop(unsafe { Box::from_raw(raw) });
@@ -398,7 +488,7 @@ fn drain_events(hwnd: HWND) {
     let mut msg = MSG::default();
     unsafe {
         while PeekMessageW(&mut msg, Some(hwnd), WM_APP_EVENT, WM_APP_EVENT, PM_REMOVE).as_bool() {
-            drop(Box::from_raw(msg.lParam.0 as *mut Event));
+            drop(Box::from_raw(msg.lParam.0 as *mut (u64, Event)));
         }
     }
 }
@@ -436,10 +526,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         let Some(a) = app(hwnd) else { return DefWindowProcW(hwnd, msg, wp, lp) };
         match msg {
             WM_APP_EVENT => {
-                let ev = *Box::from_raw(lp.0 as *mut Event);
-                if !a.quitting {
-                    a.on_event(ev);
-                }
+                let (gen, ev) = *Box::from_raw(lp.0 as *mut (u64, Event));
+                a.handle_posted(gen, ev);
                 LRESULT(0)
             }
             WM_PAINT => {
@@ -462,22 +550,24 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_LBUTTONUP => {
                 let (x, y) = lparam_point(lp);
                 let c = a.close_rect();
-                if x >= c.left && x < c.right && y >= c.top && y < c.bottom {
-                    a.quit();
-                } else if matches!(a.state, AppState::SignedOut) {
-                    a.begin_sign_in();
+                let on_close = x >= c.left && x < c.right && y >= c.top && y < c.bottom;
+                let signed_out = matches!(a.state, AppState::SignedOut);
+                if on_close {
+                    quit(hwnd);
+                } else if signed_out {
+                    begin_sign_in(hwnd);
                 }
                 LRESULT(0)
             }
             WM_APP_SIGNIN => {
-                a.begin_sign_in();
+                begin_sign_in(hwnd);
                 LRESULT(0)
             }
             WM_NCLBUTTONDBLCLK => LRESULT(0),
             WM_NCRBUTTONUP | WM_RBUTTONUP => {
                 let mut pt = POINT::default();
                 let _ = GetCursorPos(&mut pt);
-                a.show_menu(pt.x, pt.y);
+                show_menu(hwnd, pt.x, pt.y);
                 LRESULT(0)
             }
             WM_CONTEXTMENU => LRESULT(0),
@@ -508,7 +598,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             WM_CLOSE => {
-                a.quit();
+                quit(hwnd);
                 LRESULT(0)
             }
             WM_ENDSESSION => {
@@ -566,6 +656,8 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
         let dpi = GetDpiForWindow(hwnd).max(96);
         let mut a = Box::new(App {
             hwnd,
+            dir: app_dir(),
+            gen: 0,
             settings,
             state: AppState::Loading,
             orgs: Vec::new(),
@@ -657,5 +749,108 @@ mod demo {
                 extra: vec![],
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::usage::{Limits, Window};
+    use windows::Win32::Graphics::Gdi::{GetDC, GetTextExtentPoint32W, ReleaseDC};
+
+    fn text_width(font: &Font, s: &str) -> i32 {
+        unsafe {
+            let dc = GetDC(None);
+            let _sel = Selected::font(dc, font);
+            let wide: Vec<u16> = s.encode_utf16().collect();
+            let mut size = windows::Win32::Foundation::SIZE::default();
+            let _ = GetTextExtentPoint32W(dc, &wide, &mut size);
+            drop(_sel);
+            ReleaseDC(None, dc);
+            size.cx
+        }
+    }
+
+    #[test]
+    fn columns_fit_longest_strings() {
+        // Logical px at 96 DPI, same fonts the widget paints with.
+        let (normal, bold) = (Font::segoe(12, false), Font::segoe(12, true));
+        let width = |c: (i32, i32)| c.1 - c.0;
+        for s in ["Session", "Weekly", "Opus wk", "Sonnet wk"] {
+            assert!(text_width(&bold, s) <= width(COL_LABEL), "label {s:?} clipped");
+        }
+        for s in ["resetting…", "23h 59m", "6d 23h", "59m"] {
+            assert!(text_width(&normal, s) <= width(COL_REMAIN), "countdown {s:?} clipped");
+        }
+        for s in ["100%", "130%"] {
+            assert!(text_width(&normal, s) <= width(COL_PCT), "percent {s:?} clipped");
+        }
+        // Columns don't overlap each other or the close button, and fit the window.
+        assert!(COL_LABEL.1 <= COL_BAR.0 && COL_BAR.1 <= COL_PCT.0 && COL_PCT.1 <= COL_REMAIN.0);
+        assert!(COL_REMAIN.1 <= W - CLOSE - 4);
+    }
+
+    fn no_sign_in(_: HWND) -> Option<Session> {
+        None
+    }
+
+    fn test_app(dir: &std::path::Path) -> App {
+        App {
+            hwnd: HWND::default(),
+            dir: dir.to_path_buf(),
+            gen: 1,
+            settings: Settings::default(),
+            state: AppState::Loading,
+            orgs: Vec::new(),
+            current_org: None,
+            fetcher: None,
+            session: None,
+            sign_in: no_sign_in,
+            dpi: 96,
+            font: Font::segoe(12, false),
+            font_bold: Font::segoe(12, true),
+            quitting: false,
+        }
+    }
+
+    fn limits() -> UsageState {
+        let w = Window { utilization: 10.0, resets_at: None };
+        UsageState::Limits(Limits { session: w.clone(), weekly: w, extra: vec![] })
+    }
+
+    #[test]
+    fn late_event_after_sign_out_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = test_app(dir.path());
+        let old_gen = a.gen;
+        a.signed_out();
+        // A fetch that was in flight when the user signed out arrives afterwards.
+        a.handle_posted(old_gen, Event::Usage(limits()));
+        assert_eq!(a.state, AppState::SignedOut);
+        a.handle_posted(old_gen, Event::Error(FetchError::Network("x".into())));
+        assert_eq!(a.state, AppState::SignedOut);
+    }
+
+    #[test]
+    fn current_generation_event_is_applied() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = test_app(dir.path());
+        let gen = a.gen;
+        a.handle_posted(gen, Event::Usage(limits()));
+        assert!(matches!(a.state, AppState::Data { stale: false, .. }));
+    }
+
+    #[test]
+    fn menu_action_uses_snapshot_not_live_state() {
+        let snap = MenuSnapshot { orgs: vec!["org-a".into(), "org-b".into()] };
+        assert_eq!(menu_action(ID_ORG + 1, &snap), Action::Org("org-b".into()));
+        assert_eq!(menu_action(ID_ORG + 2, &snap), Action::None);
+        assert_eq!(menu_action(ID_SIGN_OUT, &snap), Action::SignOut);
+        assert_eq!(menu_action(ID_SIGN_IN, &snap), Action::SignIn);
+        assert_eq!(menu_action(ID_INTERVAL + 2, &snap), Action::Interval(INTERVAL_CHOICES[2]));
+        assert_eq!(menu_action(ID_OPACITY + 3, &snap), Action::Opacity(OPACITY_CHOICES[3]));
+        assert_eq!(menu_action(ID_REFRESH, &snap), Action::Refresh);
+        assert_eq!(menu_action(ID_QUIT, &snap), Action::Quit);
+        assert_eq!(menu_action(0, &snap), Action::None);
     }
 }

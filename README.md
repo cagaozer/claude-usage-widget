@@ -68,7 +68,8 @@ your Google address instead.
 | Temporary sign-in browser profile (deleted after sign-in) | `%LOCALAPPDATA%\ClaudeUsageWidget\WebView2` |
 
 To remove everything: quit the widget, delete the exe, and delete the two
-`ClaudeUsageWidget` folders above. **Sign out** in the menu deletes the saved session.
+`ClaudeUsageWidget` folders above. **Sign out** in the menu deletes the widget's saved
+session; it doesn't sign you out of claude.ai in your browser or elsewhere.
 
 ## Build from source
 
