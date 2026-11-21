@@ -1,7 +1,7 @@
 # Claude Usage Widget for macOS — Design
 
 Date: 2026-11-21
-Status: Draft, awaiting approval
+Status: Approved 2026-11-21
 Builds on: `2026-11-20-claude-usage-widget-design.md` (Windows version, shipped)
 
 ## Intent and why
