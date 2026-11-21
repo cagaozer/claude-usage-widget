@@ -28,7 +28,7 @@ impl Settings {
     pub fn load(dir: &Path) -> Settings {
         std::fs::read_to_string(dir.join(FILE))
             .ok()
-            .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
+            .and_then(|s| serde_json::from_str::<Settings>(s.trim_start_matches('\u{FEFF}')).ok())
             .unwrap_or_default()
             .sanitized()
     }
@@ -93,6 +93,14 @@ mod tests {
         assert_eq!(s(63, 60).opacity_pct, 70);
         assert_eq!(s(0, 60).opacity_pct, 50);
         assert_eq!(s(85, 300), Settings { opacity_pct: 85, interval_secs: 300, ..Settings::default() });
+    }
+
+    #[test]
+    fn load_accepts_utf8_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("settings.json"), "\u{FEFF}{\"interval_secs\":120,\"opacity_pct\":85}").unwrap();
+        let s = Settings::load(dir.path());
+        assert_eq!((s.interval_secs, s.opacity_pct), (120, 85));
     }
 
     #[test]
