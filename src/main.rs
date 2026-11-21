@@ -3,6 +3,7 @@
 mod format;
 mod session;
 mod settings;
+mod source;
 mod usage;
 mod view;
 
