@@ -68,7 +68,7 @@ define_class!(
         /// The page called `window.open` (e.g. "Continue with Google"). Host it in a new
         /// window, using WebKit's configuration so it shares the session and can talk
         /// back to its opener.
-        #[unsafe(method(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
+        #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
         fn create_web_view(
             &self,
             _web: &WKWebView,
