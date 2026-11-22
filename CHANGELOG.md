@@ -35,5 +35,5 @@ First public release.
 - Organization picker for accounts in more than one organization, sign out, a single
   running copy, and a clean quit.
 
-[0.1.1]: https://github.com/cagaozer/claude-usage-widget/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/cagaozer/claude-usage-widget/releases/tag/v0.1.0
+[0.1.1]: https://github.com/cagaozer/claude-usage-widget-mini/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/cagaozer/claude-usage-widget-mini/releases/tag/v0.1.0
