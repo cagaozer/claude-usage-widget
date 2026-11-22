@@ -17,6 +17,8 @@ mod paths;
 #[cfg(windows)]
 mod signin;
 #[cfg(windows)]
+mod topmost;
+#[cfg(windows)]
 mod widget;
 
 #[cfg(windows)]

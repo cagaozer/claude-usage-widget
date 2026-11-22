@@ -31,6 +31,9 @@ pub const WM_APP_EVENT: u32 = WM_APP + 1;
 const WM_APP_SIGNIN: u32 = WM_APP + 2;
 /// Repaints once a minute so the countdowns stay current between fetches.
 const TIMER_COUNTDOWN: usize = 1;
+/// Checks once a second that no other window has pushed the widget out of the
+/// always-on-top layer (see `topmost.rs`). Does nothing in the normal case.
+const TIMER_TOPMOST: usize = 2;
 
 fn color(c: layout::Rgb) -> COLORREF {
     rgb(c.0, c.1, c.2)
@@ -119,6 +122,7 @@ impl App {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
             let _ = KillTimer(Some(self.hwnd), TIMER_COUNTDOWN);
+            let _ = KillTimer(Some(self.hwnd), TIMER_TOPMOST);
         }
         self.ctl.prepare_quit(); // stops the fetch thread (without waiting), saves settings
         drain_events(self.hwnd);
@@ -409,6 +413,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let _ = InvalidateRect(Some(hwnd), None, false);
                 LRESULT(0)
             }
+            WM_TIMER if wp.0 == TIMER_TOPMOST => {
+                crate::topmost::ensure_topmost(hwnd);
+                LRESULT(0)
+            }
             WM_DPICHANGED => {
                 a.dpi = (wp.0 & 0xFFFF) as u32;
                 a.rebuild_fonts();
@@ -521,6 +529,7 @@ pub fn run(settings: Settings, start: StartMode, sign_in: SignIn) -> ExitCode {
 
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         SetTimer(Some(hwnd), TIMER_COUNTDOWN, 60_000, None);
+        SetTimer(Some(hwnd), TIMER_TOPMOST, 1_000, None);
 
         let fx = match start {
             StartMode::Session(s) => a.ctl.start_with_session(s),
