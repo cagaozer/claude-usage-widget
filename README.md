@@ -47,7 +47,8 @@ Weekly   ███░░░░░░░  31%  4d 5h
 ## Features
 
 - **Always on top**, small (252 × 56 points), draggable; it remembers where you put it
-  and comes back on a visible screen if a monitor is unplugged.
+  and comes back on a visible screen if a monitor is unplugged. On Windows, if another program
+  pushes it behind its windows, it puts itself back on top within a second.
 - **Refreshes automatically** every 60 s by default (30 s, 60 s, 2 min or 5 min); the
   countdowns tick between refreshes.
 - **Adjustable opacity**: 100, 85, 70 or 50 %.
@@ -77,7 +78,8 @@ Weekly   ███░░░░░░░  31%  4d 5h
 
 ## Download and run
 
-Downloads are on the [Releases](../../releases) page.
+Downloads are on the [Releases](../../releases) page. See [CHANGELOG.md](CHANGELOG.md)
+for what changed in each version.
 
 ### Windows (10 or 11, 64-bit)
 
@@ -196,7 +198,7 @@ cargo build --release -p claude_usage_widget_win
 ```sh
 cargo test -p usage_core -p claude_usage_widget_mac
 cargo build --release -p claude_usage_widget_mac
-sh macos/scripts/bundle.sh target/release/claude-usage-widget-mac dist 0.1.0
+sh macos/scripts/bundle.sh target/release/claude-usage-widget-mac dist 0.1.1
 # -> dist/ClaudeUsageWidget.app
 ```
 

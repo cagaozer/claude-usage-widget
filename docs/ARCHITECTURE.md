@@ -80,6 +80,11 @@ Each platform crate compiles to an empty `main` on the other OS, so
   by answering `WM_NCHITTEST` with "caption" everywhere except the close button.
   Functions that open nested message loops (the context menu, the sign-in window) take
   the `HWND`, not `&mut App`, so no reference is held while `wndproc` is re-entered.
+- `topmost.rs`: keeps the widget in the always-on-top layer. `WS_EX_TOPMOST` at creation
+  is not enough, because other programs can push a topmost window back among ordinary
+  windows. A 1-second timer in `widget.rs` calls `ensure_topmost`, which re-asserts
+  `HWND_TOPMOST` only if an ordinary window sits above the widget (or the flag is gone).
+  The healthy case is a no-op, so the widget never jumps over its own menu.
 - `signin.rs`: a WebView2 window on `https://claude.ai/login` with a fresh profile. Pop-ups
   are left to WebView2's default handling so Google's `window.opener` hand-back works.
   The cookie manager is polled once a second for `sessionKey`; the profile folder is

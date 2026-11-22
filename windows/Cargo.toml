@@ -1,6 +1,6 @@
 [package]
 name = "claude_usage_widget_win"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Tiny always-on-top Windows widget showing claude.ai session and weekly usage"
 license = "GPL-3.0-or-later"
